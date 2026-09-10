@@ -1822,6 +1822,19 @@ export function mountTrace(root: HTMLElement) {
     }
   }
 
+  /**
+   * Wiring the tool buttons was lost in the port: setTool existed and beginRun called it
+   * once, so Sketch looked active while Adjust, Erase and Pan did nothing at all.
+   */
+  const TOOL_BUTTONS: [string, Tool][] = [
+    ['toolAdjust', 'adjust'],
+    ['toolErase', 'erase'],
+    ['toolDraw', 'draw'],
+    ['toolPan', 'pan'],
+  ];
+  for (const [id, tool] of TOOL_BUTTONS)
+    $(id).addEventListener('click', () => setTool(tool), sig);
+
   function setTool(t: Tool) {
     S.tool = t;
     (['adjust', 'draw', 'erase', 'pan'] as Tool[]).forEach((k) =>
