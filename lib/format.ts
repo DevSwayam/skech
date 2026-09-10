@@ -22,8 +22,19 @@ export function fmtUSD0(x: number) {
   return (x < 0 ? '−$' : '$') + s;
 }
 
+/** Adaptive precision: the market picker spans five-figure BTC down to cent-priced perps. */
 export function fmtPrice(p: number) {
-  return '$' + Math.round(p).toLocaleString('en-US');
+  const a = Math.abs(p);
+  const dp = a >= 1000 ? 0 : a >= 100 ? 1 : a >= 1 ? 3 : a >= 0.01 ? 5 : 7;
+  return (
+    '$' +
+    p.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp })
+  );
+}
+
+/** m:ss, signed, for an axis that now extends into the history before the session. */
+export function fmtTSigned(sec: number) {
+  return (sec < -0.5 ? '−' : '') + fmtT(Math.abs(sec));
 }
 
 export function fmtDur(sec: number) {

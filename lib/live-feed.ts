@@ -9,6 +9,7 @@ const STALE_CHECK_MS = 5_000;
 export interface FeedState {
   status: FeedStatus;
   source: Venue | null;
+  symbol: string;
   price: number;
   change24h: number | null;
   ticks: number;
@@ -28,6 +29,7 @@ export class LiveFeed {
   private state: FeedState = {
     status: 'connecting',
     source: null,
+    symbol: 'BTCUSDT',
     price: 0,
     change24h: null,
     ticks: 0,
@@ -40,11 +42,16 @@ export class LiveFeed {
   private demoId: ReturnType<typeof setInterval> | null = null;
   private watchdog: ReturnType<typeof setTimeout> | null = null;
   private staleId: ReturnType<typeof setInterval> | null = null;
+  private beatId: ReturnType<typeof setInterval> | null = null;
   private lastTick = 0;
   private stopped = false;
 
-  constructor(t0Ms: number) {
+  readonly symbol: string;
+
+  constructor(t0Ms: number, symbol = 'BTCUSDT') {
     this.tape = new PriceTape(t0Ms);
+    this.symbol = symbol;
+    this.state = { ...this.state, symbol };
   }
 
   get snapshot(): FeedState {
@@ -64,7 +71,7 @@ export class LiveFeed {
   async start() {
     await this.loadHistory();
     if (this.stopped) return;
-    this.openSocket(this.state.source ?? 'coinbase');
+    this.openSocket(this.state.source ?? 'bybit');
     this.staleId = setInterval(() => this.checkStale(), STALE_CHECK_MS);
   }
 
@@ -78,12 +85,14 @@ export class LiveFeed {
     if (Date.now() - this.lastTick < STALE_MS) return;
     this.emit({ status: 'stale' });
     this.closeSocket();
-    this.openSocket(this.state.source ?? 'coinbase');
+    this.openSocket(this.state.source ?? 'bybit');
   }
 
   private async loadHistory() {
     try {
-      const res = await fetch('/api/candles?granularity=60', { cache: 'no-store' });
+      const res = await fetch(`/api/candles?granularity=60&symbol=${encodeURIComponent(this.symbol)}`, {
+        cache: 'no-store',
+      });
       const j = (await res.json()) as { source: Venue | null; candles: Candle[] };
       if (!j.candles?.length) throw new Error('no candles');
       this.tape.seedCandles(j.candles);
@@ -121,7 +130,7 @@ export class LiveFeed {
     const spec = VENUES[venue];
     this.emit({ status: 'connecting', source: venue });
     try {
-      this.ws = new WebSocket(spec.wsUrl);
+      this.ws = new WebSocket(spec.wsUrl(this.symbol));
     } catch {
       this.startPolling();
       return;
@@ -135,21 +144,27 @@ export class LiveFeed {
     }, 6000);
 
     this.ws.onopen = () => {
-      const sub = spec.subscribe?.();
+      const sub = spec.subscribe?.(this.symbol);
       if (sub) this.ws?.send(sub);
+      // Bybit closes a socket it has not heard from; keep it alive explicitly.
+      if (spec.heartbeat) {
+        this.beatId = setInterval(() => {
+          if (this.ws?.readyState === WebSocket.OPEN) this.ws.send(spec.heartbeat!.message);
+        }, spec.heartbeat.everyMs);
+      }
     };
     this.ws.onmessage = (ev) => {
       if (this.stopped) return;
-      let tick: VenueTick | null = null;
+      let ticks: VenueTick[] | null = null;
       try {
-        tick = spec.parse(ev.data as string);
+        ticks = spec.parse(ev.data as string);
       } catch {
         return;
       }
-      if (!tick) return;
+      if (!ticks?.length) return;
       if (this.state.status !== 'live') this.emit({ status: 'live' });
       this.clearTimers();
-      this.accept(tick);
+      for (const tick of ticks) this.accept(tick);
     };
     this.ws.onerror = () => {
       if (!this.stopped && this.state.status !== 'live') this.startPolling();
@@ -166,7 +181,9 @@ export class LiveFeed {
     let misses = 0;
     const tick = async () => {
       try {
-        const res = await fetch('/api/price', { cache: 'no-store' });
+        const res = await fetch(`/api/price?symbol=${encodeURIComponent(this.symbol)}`, {
+          cache: 'no-store',
+        });
         const j = (await res.json()) as { price: number | null };
         if (!j.price) throw new Error('no price');
         misses = 0;
@@ -194,6 +211,8 @@ export class LiveFeed {
   }
 
   private closeSocket() {
+    if (this.beatId) clearInterval(this.beatId);
+    this.beatId = null;
     const sock = this.ws;
     this.ws = null;
     if (!sock) return;

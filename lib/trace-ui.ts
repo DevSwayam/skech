@@ -10,8 +10,9 @@
  *   - A run cannot be replayed against the same prices, because there is no generator.
  *     Leverage comparison and exports replay against the *recorded* tape instead.
  */
+import { CANDLE_MS, VENUES } from './feed';
 import { FEED_LABEL, LiveFeed, type FeedState } from './live-feed';
-import { clamp, fmtPrice, fmtT, fmtUSD, fmtUSD0, labelReason, lerp } from './format';
+import { clamp, fmtPrice, fmtT, fmtTSigned, fmtUSD, fmtUSD0, labelReason, lerp } from './format';
 import { PATTERNS, PATTERN_SCALE } from './patterns';
 import { guideHtml, mountCoachMarks } from './trace-guide';
 import { GLOSS, mountPopovers } from './trace-info';
@@ -104,7 +105,14 @@ export function mountTrace(root: HTMLElement) {
   const ac = new AbortController();
   const sig = { signal: ac.signal };
 
-  let feed = new LiveFeed(Date.now());
+  /**
+   * While the pointer is down the view is frozen. If the price axis kept re-fitting it
+   * would chase the stroke being drawn and the price under the cursor would run away;
+   * if the time window kept scrolling, the canvas would slide out from under the pen.
+   */
+  const dragging = () => !!(S.live || S.drawing || S.adjust || S.drag || S.pan);
+
+  let feed = new LiveFeed(Date.now(), 'BTCUSDT');
   let unsubFeed = () => {};
   const priceAt = (t: number) => feed.tape.at(t);
 
@@ -203,14 +211,15 @@ export function mountTrace(root: HTMLElement) {
     const v = S.view;
     const H = S.cfg.horizonSec;
     const span = v.t1 - v.t0;
-    const ns = clamp(span * factor, Math.max(10, H / 200), H);
+    const ns = clamp(span * factor, Math.max(10, H / 200), H - earliestT());
     const a = atT == null ? (v.t0 + v.t1) / 2 : atT;
     const frac = span > 0 ? (a - v.t0) / span : 0.5;
     let t0 = a - frac * ns;
     let t1 = t0 + ns;
-    if (t0 < 0) {
-      t0 = 0;
-      t1 = ns;
+    const floor = earliestT();
+    if (t0 < floor) {
+      t0 = floor;
+      t1 = floor + ns;
     }
     if (t1 > H) {
       t1 = H;
@@ -225,7 +234,7 @@ export function mountTrace(root: HTMLElement) {
     const v = S.view;
     const H = S.cfg.horizonSec;
     const span = v.t1 - v.t0;
-    S.view.t0 = clamp(v.t0 + span * 0.25 * dir, 0, H - span);
+    S.view.t0 = clamp(v.t0 + span * 0.25 * dir, earliestT(), H - span);
     S.view.t1 = S.view.t0 + span;
     updateViewLabel();
     draw();
@@ -290,6 +299,7 @@ export function mountTrace(root: HTMLElement) {
    * toward the target keeps a new tick from making the axis jump.
    */
   function autoFitPrice() {
+    if (dragging()) return;
     const c = S.cfg;
     const { t0, t1 } = S.view;
     let lo = Infinity;
@@ -308,6 +318,12 @@ export function mountTrace(root: HTMLElement) {
       );
       for (let i = 0; i <= n; i++) if (ser[i].t >= t0 && ser[i].t <= t1) see(ser[i].p);
     }
+    for (const k of feed.tape.candles) {
+      const t = (k.t + CANDLE_MS / 2 - feed.tape.t0Ms) / 1000;
+      if (t < t0 || t > t1) continue;
+      see(k.l);
+      see(k.h);
+    }
     for (const st of S.strokes) for (const q of st) if (q.t >= t0 && q.t <= t1) see(q.p);
     if (S.plan)
       for (const l of S.plan.legs)
@@ -323,7 +339,7 @@ export function mountTrace(root: HTMLElement) {
     // whole height would still be a smaller move than the threshold for counting as a
     // leg, so every drawing would read as flat and nothing could ever be traded.
     const tolUsd = (c.refPrice * c.tolPct) / 100;
-    const half = Math.max(((hi - lo) / 2) * 1.35, tolUsd * 1.6, c.refPrice * 0.00005);
+    const half = Math.max(((hi - lo) / 2) * 1.35, tolUsd * 2, c.refPrice * 0.00005);
     S.view.pc = lerp(S.view.pc, (mid / c.refPrice - 1) * 100, 0.12);
     setYRange(lerp(S.yRange, (half / c.refPrice) * 100, 0.12));
     updateViewLabel();
@@ -331,7 +347,7 @@ export function mountTrace(root: HTMLElement) {
 
   function updateViewLabel() {
     const v = S.view;
-    $('viewLabel').textContent = `View ${fmtT(v.t0)}–${fmtT(v.t1)} of ${fmtT(S.cfg.horizonSec)}, price ${v.pc >= 0 ? '+' : ''}${v.pc.toFixed(2)}% ± ${S.yRange}%. Zoom and pan change the view only; orders do not move.`;
+    $('viewLabel').textContent = `View ${fmtTSigned(v.t0)}–${fmtTSigned(v.t1)} of ${fmtT(S.cfg.horizonSec)}, price ${v.pc >= 0 ? '+' : ''}${v.pc.toFixed(2)}% ± ${S.yRange}%. Zoom and pan change the view only; orders do not move.`;
   }
 
   // ---------- compile ----------
@@ -695,7 +711,7 @@ export function mountTrace(root: HTMLElement) {
     $('restartNote').hidden = true;
     S.follow = true;
     $('vFollow').setAttribute('aria-pressed', 'true');
-    const span = Math.min(S.cfg?.horizonSec ?? 900, 300);
+    const span = Math.min(S.cfg?.horizonSec ?? 900, 180);
     S.view = { t0: 0, t1: span, pc: 0 };
     $('liveStart').hidden = true;
     $('liveStop').hidden = false;
@@ -754,17 +770,22 @@ export function mountTrace(root: HTMLElement) {
   }
 
   /** Start a whole new session: a new recording of the live feed from t = 0. */
-  function newSession() {
+  function newSession(symbol?: string) {
+    const sym = symbol ?? feed.symbol;
     unsubFeed();
     feed.stop();
-    feed = new LiveFeed(Date.now());
+    feed = new LiveFeed(Date.now(), sym);
     unsubFeed = feed.onChange(onFeed);
     void feed.start();
+    autoStarted = false;
+    showLiveliness();
+    applyMarketTolerance();
     S.strokes = [];
     S.overrides = NO_OVERRIDES();
     S.refPrice = 0;
     S.nowT = 0;
     S.playT = 0;
+    S.yAuto = true;
     $('patternNote').hidden = true;
     backToDraft();
   }
@@ -810,10 +831,12 @@ export function mountTrace(root: HTMLElement) {
   }
 
   function followNow() {
-    if (!S.follow || !S.sim) return;
+    if (!S.follow || !S.sim || dragging()) return;
     const H = S.cfg.horizonSec;
-    const span = Math.min(S.view.t1 - S.view.t0, H);
-    const t0 = clamp(S.playT - span * 0.4, 0, H - span);
+    const span = Math.min(S.view.t1 - S.view.t0, H - earliestT());
+    // Anchoring at a fixed fraction keeps the frame full from the first second, because
+    // the window can now reach back into the candles loaded before the session began.
+    const t0 = clamp(S.playT - span * 0.4, earliestT(), H - span);
     S.view.t0 = t0;
     S.view.t1 = t0 + span;
   }
@@ -954,7 +977,7 @@ export function mountTrace(root: HTMLElement) {
     $('exVideo').onclick = exportVideo;
     $('exPng').onclick = exportPNG;
     $('exJson').onclick = exportJSON;
-    $('rerun').onclick = newSession;
+    $('rerun').onclick = () => newSession();
     $('back2').onclick = backToDraft;
   }
 
@@ -1060,7 +1083,7 @@ export function mountTrace(root: HTMLElement) {
       ) || 7200;
     for (let t = Math.ceil(S.view.t0 / tStep) * tStep; t <= S.view.t1 + 1e-6; t += tStep) {
       const x = xOfT(t);
-      ctx.strokeStyle = t === 0 ? '#C8CED6' : '#E3E7EC';
+      ctx.strokeStyle = Math.abs(t) < 1e-9 ? '#C8CED6' : '#E3E7EC';
       ctx.lineWidth = 1;
       ctx.beginPath();
       ctx.moveTo(x, y0);
@@ -1068,7 +1091,7 @@ export function mountTrace(root: HTMLElement) {
       ctx.stroke();
       ctx.fillStyle = '#5E6774';
       ctx.textAlign = 'center';
-      ctx.fillText(fmtT(t), x, y1 + 14);
+      ctx.fillText(fmtTSigned(t), x, y1 + 14);
     }
     const steps = [0.005, 0.01, 0.02, 0.025, 0.05, 0.1, 0.2, 0.25, 0.5, 1, 2, 2.5, 5, 10, 20, 50];
     const pStep = steps.find((s) => (S.yRange * 2) / s <= 9) || 50;
@@ -1125,7 +1148,7 @@ export function mountTrace(root: HTMLElement) {
         ctx.fillText(
           f.kind === 'start' ? 'no position yet' : f.kind === 'end' ? 'time exit' : 'flat',
           (xa + xb) / 2,
-          y0 + 12,
+          y0 + 28,
         );
       }
     }
@@ -1354,6 +1377,32 @@ export function mountTrace(root: HTMLElement) {
     }
     ctx.font = font('12px');
 
+    // History loaded before the session began, at negative t. Drawing it is what keeps
+    // the frame full from the first second instead of a squiggle in the corner.
+    const hist: { t: number; p: number }[] = [];
+    for (const k of feed.tape.candles) {
+      const tk = (k.t + CANDLE_MS / 2 - feed.tape.t0Ms) / 1000;
+      if (tk >= 0) break;
+      if (tk < S.view.t0 - 120 || tk > S.view.t1 + 120) continue;
+      hist.push({ t: tk, p: k.c });
+    }
+    if (hist.length) {
+      if (S.sim?.series.length) hist.push({ t: 0, p: S.sim.series[0].p });
+      else if (feed.tape.last) hist.push({ t: 0, p: feed.tape.last });
+    }
+    if (hist.length > 1) {
+      ctx.save();
+      ctx.strokeStyle = '#1B2431';
+      ctx.lineWidth = 1.2;
+      ctx.globalAlpha = 0.5;
+      ctx.lineJoin = 'round';
+      ctx.beginPath();
+      ctx.moveTo(xOfT(hist[0].t), yOfP(hist[0].p));
+      for (let i = 1; i < hist.length; i++) ctx.lineTo(xOfT(hist[i].t), yOfP(hist[i].p));
+      ctx.stroke();
+      ctx.restore();
+    }
+
     // the market itself
     if (S.sim) {
       const ser = S.sim.series;
@@ -1433,24 +1482,22 @@ export function mountTrace(root: HTMLElement) {
         }
         ctx.fillStyle = '#9A6200';
         ctx.textAlign = 'left';
-        ctx.fillText(`queued, locked ${c.lockSec} s`, xb + 6, y0 + 12);
-        if (S.resumeAfterDraw) ctx.fillText('clock paused while you draw', xb + 6, y0 + 44);
+        const qLabel = `queued, locked ${c.lockSec} s`;
+        if (ctx.measureText(qLabel).width < x1 - xb - 12) ctx.fillText(qLabel, xb + 6, y0 + 12);
+        if (S.resumeAfterDraw) ctx.fillText('clock paused while you draw', xb + 6, y0 + 60);
         if (S.tool === 'adjust' && !S.sim.ended && !S.reviewing) drawHandles(x0, x1, y0, y1);
         ctx.fillStyle = '#2E4FD8';
         ctx.textAlign = 'left';
-        ctx.fillText(
-          S.reviewing
-            ? 'reviewing the past: press Live to draw again'
-            : S.tool === 'adjust'
-              ? 'drag a handle to move a turn, or drag the target or stop line'
-              : S.tool === 'erase'
-                ? 'click the plan to cut it there, or drag a range'
-                : S.tool === 'draw'
-                  ? 'sketch a new shape: it replaces the plan from where you start'
-                  : '',
-          xb + 6,
-          y0 + 28,
-        );
+        const hint = S.reviewing
+          ? 'reviewing the past: press Live to draw again'
+          : S.tool === 'adjust'
+            ? 'drag a handle to move a turn, or drag the target or stop line'
+            : S.tool === 'erase'
+              ? 'click the plan to cut it there, or drag a range'
+              : S.tool === 'draw'
+                ? 'sketch a new shape: it replaces the plan from where you start'
+                : '';
+        if (hint && ctx.measureText(hint).width < x1 - xb - 12) ctx.fillText(hint, xb + 6, y0 + 44);
         ctx.font = font('12px');
       }
     }
@@ -1527,6 +1574,11 @@ export function mountTrace(root: HTMLElement) {
 
   /** Seconds since the session started, straight from the wall clock. */
   const elapsedNow = () => clamp((Date.now() - feed.tape.t0Ms) / 1000, 0, S.cfg.horizonSec);
+  /** Earliest time we hold data for. History sits at negative t, before the session. */
+  function earliestT() {
+    const k = feed.tape.candles[0];
+    return k ? Math.min(0, (k.t - feed.tape.t0Ms) / 1000) : 0;
+  }
   /**
    * The lock boundary must come from the wall clock, not from the simulator's stepped
    * position. `sim.tNow` only advances inside the animation loop, and the browser
@@ -1974,6 +2026,7 @@ export function mountTrace(root: HTMLElement) {
         draw();
         return;
       }
+      if (el.id === 'tolPct') tolTouched = true;
       if (['showSwings', 'penSmooth', 'forwardOnly', 'pauseWhileDrawing'].includes(el.id)) {
         readCfg();
         draw();
@@ -2172,7 +2225,7 @@ export function mountTrace(root: HTMLElement) {
     else startLive();
   };
   $('liveStop').onclick = stopLive;
-  $('restartNow').onclick = newSession;
+  $('restartNow').onclick = () => newSession();
 
   // Real time only: "Live" re-attaches the view to now after reviewing the past.
   $('play').onclick = () => {
@@ -2485,6 +2538,81 @@ export function mountTrace(root: HTMLElement) {
     requestAnimationFrame(frame);
   }
 
+  // ---------- market picker ----------
+  interface MarketRow {
+    symbol: string;
+    label: string;
+    last: number;
+    change24hPct: number;
+    turnover24h: number;
+    fundingRatePct: number;
+    livelinessPct: number;
+  }
+  let markets: MarketRow[] = [];
+  /** Once you pick a market yourself, the boot default stops overriding it. */
+  let marketChosen = false;
+  /** Once you edit the tolerance yourself, the market no longer sets it. */
+  let tolTouched = false;
+
+  /**
+   * A move counts as a leg when it is a couple of percent of what the market covers in
+   * a day. One fixed percentage cannot serve both ends of the list: 0.05% of price is
+   * about right for BTC, which ranges 2.5% a day, and far too tight for a perp that
+   * ranges 13%, where every tick would become its own trade.
+   */
+  function applyMarketTolerance() {
+    if (tolTouched) return;
+    const m = markets.find((x) => x.symbol === feed.symbol);
+    if (!m || !(m.livelinessPct > 0)) return;
+    const tol = clamp(m.livelinessPct * 0.02, 0.005, 1);
+    $<HTMLInputElement>('tolPct').value = String(Math.round(tol * 1000) / 1000);
+    readCfg();
+  }
+
+  function showLiveliness() {
+    const m = markets.find((x) => x.symbol === feed.symbol);
+    $('marketLively').textContent = m
+      ? `${m.livelinessPct.toFixed(2)}% range today · $${Math.round(m.turnover24h / 1e6)}M turnover · funding ${m.fundingRatePct.toFixed(4)}%`
+      : '—';
+    $('hdrSym').textContent = m ? m.label : feed.symbol;
+  }
+
+  async function loadMarkets() {
+    try {
+      const res = await fetch('/api/markets', { cache: 'no-store' });
+      const j = (await res.json()) as { markets?: MarketRow[] };
+      if (!j.markets?.length) return;
+      markets = j.markets;
+      const sel = $<HTMLSelectElement>('marketPick');
+      sel.innerHTML = markets
+        .map(
+          (m) =>
+            `<option value="${esc(m.symbol)}">${esc(m.label)} · ${m.change24hPct >= 0 ? '+' : ''}${m.change24hPct.toFixed(1)}% 24h</option>`,
+        )
+        .join('');
+      const top = markets[0].symbol;
+      // Open on the liveliest liquid market rather than the boot default: a chart of
+      // something that barely moves is not worth drawing on. BTC stays in the list.
+      const target = marketChosen ? feed.symbol : top;
+      sel.value = markets.some((m) => m.symbol === target) ? target : top;
+      showLiveliness();
+      if (!marketChosen && target !== feed.symbol && !S.strokes.length && S.phase !== 'DONE')
+        newSession(target);
+      else applyMarketTolerance();
+    } catch {
+      // keep the single default option
+    }
+  }
+
+  $<HTMLSelectElement>('marketPick').addEventListener(
+    'change',
+    (e) => {
+      marketChosen = true;
+      newSession((e.target as HTMLSelectElement).value);
+    },
+    sig,
+  );
+
   // ---------- feed wiring ----------
   function onFeed(s: FeedState) {
     const label = FEED_LABEL[s.status];
@@ -2496,9 +2624,7 @@ export function mountTrace(root: HTMLElement) {
       text.textContent = label;
     }
     $('feedSource').textContent = s.source
-      ? s.source === 'binance'
-        ? 'Binance BTCUSDT'
-        : 'Coinbase BTC-USD'
+      ? `${VENUES[s.source].label} · ${s.symbol}`
       : s.status === 'demo'
         ? 'synthetic fallback'
         : '—';
@@ -2535,6 +2661,7 @@ export function mountTrace(root: HTMLElement) {
   }
 
   const teardownPopovers = mountPopovers(root);
+  void loadMarkets();
   unsubFeed = feed.onChange(onFeed);
   void feed.start();
   readCfg();

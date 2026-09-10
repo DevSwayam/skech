@@ -140,7 +140,7 @@ export class PriceTape {
   }
 }
 
-export type Venue = 'binance' | 'coinbase';
+export type Venue = 'bybit' | 'binance' | 'coinbase';
 
 export interface VenueTick {
   price: number;
@@ -150,11 +150,14 @@ export interface VenueTick {
 
 export interface VenueSpec {
   label: string;
-  wsUrl: string;
+  /** Symbol-aware: the picker can point the socket at any listed market. */
+  wsUrl: (symbol: string) => string;
   /** Sent once the socket opens, if the venue needs an explicit subscription. */
-  subscribe?: () => string;
-  /** Returns null for anything that is not a price update. */
-  parse: (raw: string) => VenueTick | null;
+  subscribe?: (symbol: string) => string;
+  /** Some venues drop a socket that has not been pinged. */
+  heartbeat?: { everyMs: number; message: string };
+  /** A single message can carry several trades, so this always returns a list. */
+  parse: (raw: string) => VenueTick[] | null;
 }
 
 const numOr = (v: unknown) => {
@@ -163,38 +166,65 @@ const numOr = (v: unknown) => {
 };
 
 /**
- * History and live ticks must come from the same venue: BTC-USD on Coinbase and
- * BTCUSDT on Binance differ by a few dollars, and mixing them would put a visible
- * step in the chart exactly where the live data begins.
+ * History and live ticks must come from the same venue: the same asset prices slightly
+ * differently across books, and mixing them would put a visible step in the chart
+ * exactly where the live data begins.
  */
 export const VENUES: Record<Venue, VenueSpec> = {
+  bybit: {
+    label: 'Bybit perps',
+    /**
+     * `publicTrade` is every print on the book, and Bybit's REST klines include the
+     * in-progress minute — so history joins the live stream with no gap. It also lists
+     * every USDT perpetual, which is what makes the market picker possible.
+     */
+    wsUrl: () => 'wss://stream.bybit.com/v5/public/linear',
+    subscribe: (symbol) => JSON.stringify({ op: 'subscribe', args: [`publicTrade.${symbol}`] }),
+    heartbeat: { everyMs: 18_000, message: JSON.stringify({ op: 'ping' }) },
+    parse: (raw) => {
+      const m = JSON.parse(raw) as {
+        topic?: string;
+        data?: { p?: string; T?: number }[];
+      };
+      if (!m.topic?.startsWith('publicTrade') || !Array.isArray(m.data)) return null;
+      const out: VenueTick[] = [];
+      for (const d of m.data) {
+        const price = numOr(d.p);
+        if (price) out.push({ price, t: d.T ?? Date.now() });
+      }
+      return out.length ? out : null;
+    },
+  },
   binance: {
-    label: 'Binance',
+    label: 'Binance spot',
     /**
      * A combined stream, because the two things we need arrive at very different rates:
-     * `aggTrade` fires on every trade (~10/s) and keeps the chart live, while
-     * `ticker` only pushes once a second and is used solely for the 24-hour open.
+     * `aggTrade` fires on every trade and keeps the chart live, while `ticker` only
+     * pushes once a second and is used solely for the 24-hour open.
      */
-    wsUrl: 'wss://stream.binance.com:9443/stream?streams=btcusdt@aggTrade/btcusdt@ticker',
+    wsUrl: (symbol) => {
+      const s = symbol.toLowerCase();
+      return `wss://stream.binance.com:9443/stream?streams=${s}@aggTrade/${s}@ticker`;
+    },
     parse: (raw) => {
       const env = JSON.parse(raw) as { data?: Record<string, unknown> } & Record<string, unknown>;
       const d = env.data ?? env;
       if (d.e === 'aggTrade') {
         const price = numOr(d.p);
-        return price ? { price, t: (d.T as number) ?? Date.now() } : null;
+        return price ? [{ price, t: (d.T as number) ?? Date.now() }] : null;
       }
       if (d.e === '24hrTicker') {
         const price = numOr(d.c);
         return price
-          ? { price, t: (d.E as number) ?? Date.now(), open24h: numOr(d.o) }
+          ? [{ price, t: (d.E as number) ?? Date.now(), open24h: numOr(d.o) }]
           : null;
       }
       return null;
     },
   },
   coinbase: {
-    label: 'Coinbase',
-    wsUrl: 'wss://ws-feed.exchange.coinbase.com',
+    label: 'Coinbase BTC-USD',
+    wsUrl: () => 'wss://ws-feed.exchange.coinbase.com',
     subscribe: () =>
       JSON.stringify({ type: 'subscribe', product_ids: ['BTC-USD'], channels: ['ticker'] }),
     parse: (raw) => {
@@ -207,11 +237,13 @@ export const VENUES: Record<Venue, VenueSpec> = {
       if (m.type !== 'ticker') return null;
       const price = numOr(m.price);
       if (!price) return null;
-      return {
-        price,
-        t: m.time ? Date.parse(m.time) || Date.now() : Date.now(),
-        open24h: numOr(m.open_24h),
-      };
+      return [
+        {
+          price,
+          t: m.time ? Date.parse(m.time) || Date.now() : Date.now(),
+          open24h: numOr(m.open_24h),
+        },
+      ];
     },
   },
 };

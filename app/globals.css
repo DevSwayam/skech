@@ -59,7 +59,9 @@ body.sizing-risk .row[data-mode=risk]{display:flex}
 .export .status{font-size:.82rem;color:var(--muted);margin:.3rem 0}
 .sizing-table td,.sizing-table th{font-size:.8rem}
 .seg{display:inline-flex;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--white)}
-.seg button{border:0;background:transparent;padding:.25rem .6rem;font-size:.85rem;color:var(--muted)}
+.seg button{border:0;background:transparent;padding:.25rem .6rem;font-size:.85rem;color:var(--muted);white-space:nowrap}
+.row .seg[aria-label=Leverage]{flex-wrap:wrap;justify-content:flex-end}
+.row .seg[aria-label=Leverage] button{padding:.22rem .38rem;font-size:.8rem}
 .seg button+button{border-left:1px solid var(--line)}
 .seg button[aria-pressed=true]{background:var(--ink);color:#fff}
 .check{display:flex;align-items:center;gap:.5rem;font-size:.85rem;color:var(--muted);margin:.35rem 0}

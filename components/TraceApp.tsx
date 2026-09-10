@@ -22,12 +22,13 @@ export default function TraceApp() {
       <header>
         <h1>Trace — draw a trade</h1>
         <span className="sub">
-          Concept prototype for spec v4.2. Live BTC/USD price, paper trading, no wallet, no orders.
+          Concept prototype for spec v4.2. Live perpetual prices, paper trading, no wallet, no orders.
         </span>
         <span className="feed-pill connecting" id="hdrFeed">
           <i />
           <span id="hdrFeedLabel">Connecting</span>
         </span>
+        <span className="sub" id="hdrSym" />
         <span className="px" id="hdrPrice">
           —
         </span>
@@ -168,15 +169,11 @@ export default function TraceApp() {
           <div className="row">
             <label data-info="leverage">Opening leverage</label>
             <div className="seg" role="group" aria-label="Leverage">
-              <button data-lev="1" aria-pressed="false">
-                1×
-              </button>
-              <button data-lev="2" aria-pressed="false">
-                2×
-              </button>
-              <button data-lev="3" aria-pressed="true">
-                3×
-              </button>
+              {[1, 2, 3, 5, 10, 15].map((l) => (
+                <button key={l} data-lev={l} aria-pressed={l === 3}>
+                  {l}×
+                </button>
+              ))}
             </div>
           </div>
           <div className="row">
@@ -248,6 +245,18 @@ export default function TraceApp() {
         <div className="group">
           <h3 data-info="secMarket">Live market</h3>
           <div className="feed-row">
+            <span className="k">Market</span>
+            <select id="marketPick" className="btn" aria-label="Market to trade">
+              <option value="BTCUSDT">BTC perp</option>
+            </select>
+          </div>
+          <div className="feed-row">
+            <span className="k">Moves</span>
+            <span className="v" id="marketLively">
+              —
+            </span>
+          </div>
+          <div className="feed-row">
             <span className="k">Feed</span>
             <span className="feed-pill connecting" id="feedStatus">
               <i />
@@ -261,7 +270,7 @@ export default function TraceApp() {
             </span>
           </div>
           <div className="feed-row">
-            <span className="k">BTC / USD</span>
+            <span className="k">Last price</span>
             <span className="v" id="feedPrice">
               —
             </span>
@@ -273,9 +282,11 @@ export default function TraceApp() {
             </span>
           </div>
           <small>
-            Real BTC/USD, one-minute candles for history and a live trade stream on top. The market
-            is not generated and not repeatable: every run happens against whatever the market
-            actually does next.
+            Real prices: one-minute candles for history and a live trade stream on top, both from
+            Bybit&rsquo;s perpetual book. Nothing is generated and nothing repeats — every run
+            happens against whatever the market actually does next. The list is ranked by how far
+            each market has travelled today, because a chart is only worth drawing on if the price
+            moves inside the window you are planning over.
           </small>
           <div className="check">
             <label>
