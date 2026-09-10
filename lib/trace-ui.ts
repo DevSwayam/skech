@@ -80,6 +80,7 @@ export function mountTrace(root: HTMLElement) {
     /** The moment being displayed. Equals nowT unless the scrubber is in the past. */
     playT: 0,
     reviewing: false,
+    closeHot: false,
     running: false,
     drawing: null as Point[] | null,
     drag: null as 'tp' | 'stop' | null,
@@ -1514,6 +1515,8 @@ export function mountTrace(root: HTMLElement) {
     }
     ctx.restore();
 
+    drawCloseButton();
+
     if (S.strokes.length && !p.legs.length) {
       ctx.fillStyle = '#9A6200';
       ctx.textAlign = 'left';
@@ -1639,7 +1642,107 @@ export function mountTrace(root: HTMLElement) {
     return out;
   }
 
+  /**
+   * Draws the close control. Deliberately loud: a filled disc in the short colour with a
+   * white cross, a soft halo so it reads against both the price line and the hatching,
+   * and on hover it grows and names itself so the one destructive click on the canvas is
+   * never a guess.
+   */
+  function drawCloseButton() {
+    const b = closeHit();
+    if (!b) return;
+    const hot = S.closeHot;
+    const r = hot ? b.r + 3 : b.r;
+    const pos = cur().pos!;
+    ctx.save();
+
+    ctx.shadowColor = 'rgba(15,23,42,.30)';
+    ctx.shadowBlur = hot ? 12 : 7;
+    ctx.shadowOffsetY = 2;
+    ctx.fillStyle = hot ? '#A8341F' : '#C6412C';
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowColor = 'transparent';
+    ctx.shadowBlur = 0;
+    ctx.shadowOffsetY = 0;
+
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = hot ? 3.2 : 2.6;
+    ctx.lineCap = 'round';
+    const k = r * 0.42;
+    ctx.beginPath();
+    ctx.moveTo(b.x - k, b.y - k);
+    ctx.lineTo(b.x + k, b.y + k);
+    ctx.moveTo(b.x + k, b.y - k);
+    ctx.lineTo(b.x - k, b.y + k);
+    ctx.stroke();
+
+    if (hot) {
+      const label = `Close ${pos.d > 0 ? 'long' : 'short'} ${pos.Q.toFixed(5)} ${base()}`;
+      ctx.font = font('600 12px');
+      const tw = ctx.measureText(label).width;
+      // Flip the tooltip to whichever side has room.
+      const right = b.x + r + 8 + tw + 12 <= W - PAD.r;
+      const lx = right ? b.x + r + 8 : b.x - r - 8 - tw - 12;
+      const ly = b.y - 11;
+      ctx.fillStyle = 'rgba(27,36,49,.94)';
+      ctx.beginPath();
+      ctx.roundRect(lx, ly, tw + 12, 22, 5);
+      ctx.fill();
+      ctx.fillStyle = '#FFFFFF';
+      ctx.textAlign = 'left';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, lx + 6, ly + 11);
+    }
+    ctx.restore();
+  }
+
+  /**
+   * The on-chart close button: a target you can hit without aiming.
+   *
+   * Going flat used to live only in a text button in the toolbar, which is the wrong
+   * place for the one action that is urgent. It sits at the lock boundary — the earliest
+   * moment a close can actually take effect — at the price the position is carrying, and
+   * it only exists while there is something to close.
+   */
+  const toolCursor = (t: Tool) =>
+    t === 'pan' || t === 'adjust' ? 'grab' : t === 'erase' ? 'col-resize' : 'crosshair';
+
+  const CLOSE_R = 15;
+  function closeHit(): { x: number; y: number; r: number } | null {
+    if (S.phase !== 'RUN' || !S.sim || S.sim.ended || S.reviewing) return null;
+    if (!cur().pos) return null;
+    // Pinned to the right edge of the plot. Next to the boundary it landed on top of the
+    // equity ink and the price line — the busiest part of the chart — and was genuinely
+    // hard to pick out. Out here the future region is nearly always empty. Only a
+    // *pointerdown* on the disc closes, so a stroke dragged across it is unaffected.
+    const x = W - PAD.r - CLOSE_R - 10;
+    const y = clamp(yOfP(cur().p), PAD.t + CLOSE_R, HH - PAD.b - CLOSE_R);
+    return { x, y, r: CLOSE_R };
+  }
+  const overClose = (q: { x: number; y: number }) => {
+    const b = closeHit();
+    // A slightly generous radius: this is the button you press in a hurry.
+    return !!b && Math.hypot(q.x - b.x, q.y - b.y) <= b.r + 4;
+  };
+
+  function closePosition() {
+    if (!S.sim || S.sim.ended) return;
+    S.strokes = cutRange(S.strokes, boundary(), S.cfg.horizonSec + 1);
+    S.live = null;
+    S.closeHot = false;
+    liveCommit('Closed the position from the chart');
+  }
+
   C.addEventListener('pointerdown', (e) => {
+    // Closing beats every tool, including pan: a stroke that starts on the button is
+    // never a drawing.
+    if (overClose(pt(e))) {
+      e.preventDefault();
+      closePosition();
+      return;
+    }
     if (S.phase === 'RUN' && S.tool !== 'pan' && !S.sim!.ended && !S.reviewing) {
       const q = pt(e);
       if (!inPlot(q)) return;
@@ -1748,6 +1851,17 @@ export function mountTrace(root: HTMLElement) {
       }
       return;
     }
+    const hot = overClose(q);
+    if (hot !== S.closeHot) {
+      S.closeHot = hot;
+      S.dirty = true;
+      schedule();
+    }
+    if (hot) {
+      C.style.cursor = 'pointer';
+      return;
+    }
+    if (C.style.cursor === 'pointer') C.style.cursor = toolCursor(S.tool);
     if (S.phase !== 'RUN' && S.phase !== 'DONE')
       C.style.cursor = lineHit(q.y) ? 'ns-resize' : 'crosshair';
     else if (S.phase === 'RUN' && S.tool === 'adjust' && !S.pan && !S.reviewing) {
@@ -1866,7 +1980,7 @@ export function mountTrace(root: HTMLElement) {
     (['adjust', 'draw', 'erase', 'pan'] as Tool[]).forEach((k) =>
       $('tool' + k[0].toUpperCase() + k.slice(1)).setAttribute('aria-pressed', String(k === t)),
     );
-    C.style.cursor = t === 'pan' || t === 'adjust' ? 'grab' : t === 'erase' ? 'col-resize' : 'crosshair';
+    C.style.cursor = toolCursor(t);
     draw();
   }
 

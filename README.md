@@ -126,6 +126,20 @@ position, an empty order queue, and no explanation. The boundary now takes the l
 the wall clock and the simulator, an edit syncs both before reading it, and Review warns
 outright if a drawing has ended up behind now.
 
+## Closing a position
+
+While a position is open, a red disc with a white cross sits at the right-hand edge of
+the plot, tracking the price the position is carrying. Clicking it goes flat from the
+lock boundary — the same thing the *Go flat from the boundary* button does, which stays
+in the toolbar. Hovering names what will be closed.
+
+It began next to the lock boundary, which is where the close actually takes effect, and
+that turned out to be the worst place for it: the boundary is surrounded by the price
+line and the equity ink, and the disc disappeared into them. The right edge is the one
+part of the plot that is reliably empty. Only a *pointerdown* on the disc closes, so a
+stroke dragged across it on the way somewhere else is unaffected, and it is drawn last
+so nothing can cover it.
+
 ## Honest limits
 
 Prices are real; the execution is not. Fills happen at exactly the price asked for, which
