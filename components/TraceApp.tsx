@@ -69,7 +69,7 @@ export default function TraceApp() {
           </div>
           <div className="row">
             <label htmlFor="columns">Time columns</label>
-            <select id="columns" defaultValue="64">
+            <select id="columns" defaultValue="256">
               <option value="32">32 (coarse)</option>
               <option value="64">64</option>
               <option value="128">128 (fine)</option>
@@ -101,12 +101,12 @@ export default function TraceApp() {
             </span>
           </div>
           <div className="row">
-            <label htmlFor="gapMin">Minimum gap (columns of 64)</label>
-            <input id="gapMin" type="number" min="1" max="8" step="1" defaultValue="2" />
+            <label htmlFor="gapMin">Minimum gap (columns)</label>
+            <input id="gapMin" type="number" min="1" max="64" step="1" defaultValue="8" />
           </div>
           <div className="row">
             <label htmlFor="tolPct">Simplify tolerance (% of price)</label>
-            <input id="tolPct" type="number" min="0.005" max="3" step="0.005" defaultValue="0.05" />
+            <input id="tolPct" type="number" min="0.001" max="3" step="0.001" defaultValue="0.02" />
           </div>
           <div className="row">
             <label />

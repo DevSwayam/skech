@@ -112,6 +112,9 @@ export function mountTrace(root: HTMLElement) {
    */
   const dragging = () => !!(S.live || S.drawing || S.adjust || S.drag || S.pan);
 
+  /** The traded asset, e.g. ZEC. Every label used to be hardcoded to BTC. */
+  const base = () => feed.symbol.replace(/USDT$/, '');
+
   let feed = new LiveFeed(Date.now(), 'BTCUSDT');
   let unsubFeed = () => {};
   const priceAt = (t: number) => feed.tape.at(t);
@@ -339,7 +342,7 @@ export function mountTrace(root: HTMLElement) {
     // whole height would still be a smaller move than the threshold for counting as a
     // leg, so every drawing would read as flat and nothing could ever be traded.
     const tolUsd = (c.refPrice * c.tolPct) / 100;
-    const half = Math.max(((hi - lo) / 2) * 1.35, tolUsd * 2, c.refPrice * 0.00005);
+    const half = Math.max(((hi - lo) / 2) * 1.35, tolUsd * 4, c.refPrice * 0.00005);
     S.view.pc = lerp(S.view.pc, (mid / c.refPrice - 1) * 100, 0.12);
     setYRange(lerp(S.yRange, (half / c.refPrice) * 100, 0.12));
     updateViewLabel();
@@ -357,7 +360,7 @@ export function mountTrace(root: HTMLElement) {
     S.proj = simulate(S.plan, S.cfg, spineAt(S.plan));
     $('hint').style.display = S.strokes.length || S.sim ? 'none' : '';
     $('hint').textContent = !feed.tape.count
-      ? 'Loading the live BTC price…'
+      ? `Loading the live ${base()} price…`
       : S.mode === 'live'
         ? 'Live chart. Draw ahead of the lock boundary to place an order: rising means long, falling means short, lifting the pen means flat.'
         : 'Draw your plan on a still chart. Rising means long, falling means short, lifting the pen means flat. When it looks right, tick the box at the bottom of Review and press Authorize and run.';
@@ -453,7 +456,7 @@ export function mountTrace(root: HTMLElement) {
       return '<p>No executable leg yet. Draw a rising line for a long or a falling line for a short. Lift the pen where you want no position.</p>';
     const sz = p.sizing;
     out.push(
-      `<p><b>${c.mode === 'path' ? 'Follow my path' : 'Single trade'}</b> on BTC perp over ${fmtT(c.horizonSec)}, ${fmtUSD0(c.margin)} isolated margin at ${c.leverage}× opening leverage. ${
+      `<p><b>${c.mode === 'path' ? 'Follow my path' : 'Single trade'}</b> on ${base()} perp over ${fmtT(c.horizonSec)}, ${fmtUSD0(c.margin)} isolated margin at ${c.leverage}× opening leverage. ${
         sz.mode === 'risk'
           ? `Sized by risk: up to ${fmtUSD(sz.cap)} of exposure per leg so that a ${c.stopPct}% adverse move loses about ${fmtUSD(sz.plannedLoss!)}, using ${fmtUSD(sz.marginRequired)} of margin`
           : `Sized by margin: up to ${fmtUSD0(sz.cap)} of exposure per leg (${c.leverage} × ${fmtUSD0(c.margin)})`
@@ -518,15 +521,15 @@ export function mountTrace(root: HTMLElement) {
     let h = `<h3>How each leg is sized</h3><div class="summary">`;
     h += `<p>Size is a plan control, not something read from the stroke. Two numbers decide it, and the same rule applies to every leg.</p>`;
     if (sz.mode === 'margin') {
-      h += `<p><b>Fixed margin.</b> You allocated ${fmtUSD0(M)} and chose ${L}×, so each leg may open up to <b>${fmtUSD0(sz.cap)}</b> of BTC (${L} × ${fmtUSD0(M)}). Quantity is fixed at entry from the live quote: at ${fmtPrice(c.refPrice)} that is ${(sz.cap / c.refPrice).toFixed(5)} BTC.</p>`;
-      h += `<p>Raising leverage with the same margin buys more exposure and a larger gain or loss per percent of price move; it does not change the drawing or the stop. A 0.5% move on this leg — about what BTC covers in ten minutes — is worth about ${fmtUSD(sz.cap * 0.005)} either way.</p>`;
+      h += `<p><b>Fixed margin.</b> You allocated ${fmtUSD0(M)} and chose ${L}×, so each leg may open up to <b>${fmtUSD0(sz.cap)}</b> of ${base()} (${L} × ${fmtUSD0(M)}). Quantity is fixed at entry from the live quote: at ${fmtPrice(c.refPrice)} that is ${(sz.cap / c.refPrice).toFixed(5)} ${base()}.</p>`;
+      h += `<p>Raising leverage with the same margin buys more exposure and a larger gain or loss per percent of price move; it does not change the drawing or the stop. A 0.5% move on this leg — a move this market makes routinely — is worth about ${fmtUSD(sz.cap * 0.005)} either way.</p>`;
     } else {
       h += `<p><b>Risk at stop.</b> You said a leg may lose about ${fmtUSD(c.riskPerLeg)} if price moves ${c.stopPct}% against it. Exposure follows from that: ${fmtUSD(c.riskPerLeg)} ÷ ${c.stopPct}% = <b>${fmtUSD(sz.wanted!)}</b>${sz.capped ? `, more than ${L}× on ${fmtUSD0(M)} allows, so it is capped at <b>${fmtUSD(sz.cap)}</b> and the planned loss becomes ${fmtUSD(sz.plannedLoss!)}` : ''}. At ${L}× that ties up ${fmtUSD(sz.marginRequired)} of your ${fmtUSD0(M)}. Each leg also gets its own stop ${c.stopPct}% from its entry, in addition to the plan loss limit; whichever is nearer acts first.</p>`;
       h += `<p>In this mode leverage changes how much collateral the leg needs, not how much it can lose: the same ${fmtUSD(sz.cap)} of exposure needs ${fmtUSD(sz.cap)} at 1×, ${fmtUSD(sz.cap / 2)} at 2× and ${fmtUSD(sz.cap / 3)} at 3×.</p>`;
     }
     h += `<p>For every later leg the rule is <b>notional = min(cap, ${L} × cash)</b>. Profit never raises the cap; a loss shrinks what the next leg can afford. Fees are charged on each fill and reduce cash. The venue's minimum size and price precision round the quantity, and plans whose cash falls below the minimum notional skip the leg.</p>`;
     if (fills.length) {
-      h += `<table class="sizing-table"><tr><th>Leg</th><th class="num">${run ? 'Entry fill' : 'Drawn entry'}</th><th class="num">Cash before</th><th class="num">Cap</th><th class="num">${L}× cash</th><th class="num">Notional</th><th class="num">Qty (BTC)</th></tr>`;
+      h += `<table class="sizing-table"><tr><th>Leg</th><th class="num">${run ? 'Entry fill' : 'Drawn entry'}</th><th class="num">Cash before</th><th class="num">Cap</th><th class="num">${L}× cash</th><th class="num">Notional</th><th class="num">Qty (${base()})</th></tr>`;
       for (const f of fills)
         h += `<tr><td>${f.leg}</td><td class="num">${fmtPrice(f.p)}</td><td class="num">${fmtUSD(f.cashBefore!)}</td><td class="num">${fmtUSD(f.cap!)}</td><td class="num">${fmtUSD(L * f.cashBefore!)}</td><td class="num"><b>${fmtUSD(f.notional!)}</b></td><td class="num">${f.Q.toFixed(5)}</td></tr>`;
       h += `</table><small>${run ? 'Actual fills from this run.' : 'Projected, assuming the market follows your drawing; real entries use the live quote.'} Notional is the smaller of the cap and ${L} × cash at that moment.</small>`;
@@ -555,7 +558,7 @@ export function mountTrace(root: HTMLElement) {
     }
     // A tolerance that swallows the whole drawing is the one failure a live feed makes easy.
     if (S.strokes.length && !p.legs.length && p.flats.length)
-      h += `<div class="warn">Every segment is inside the ${c.tolPct}% tolerance (±${fmtUSD((c.refPrice * c.tolPct) / 100)}), so the drawing has no direction. BTC moves a few tenths of a percent in half an hour — lower the simplify tolerance, or draw a bigger move. <button class="btn small" data-tol="1">Halve the tolerance</button></div>`;
+      h += `<div class="warn">Every segment is inside the ${c.tolPct}% tolerance (±${fmtUSD((c.refPrice * c.tolPct) / 100)}), so the drawing has no direction. Lower the simplify tolerance, draw a steeper move, or pick a livelier market. <button class="btn small" data-tol="1">Halve the tolerance</button></div>`;
     h += `<h2>Plan summary</h2><div class="summary">${summary()}</div>`;
     if (p.legs.length) {
       h += `<h3>Interpreted legs</h3><table><tr><th>#</th><th>Side</th><th>From</th><th>To</th><th class="num">Move</th><th>Slope</th><th>Turn</th><th class="num">Notional</th></tr>`;
@@ -592,7 +595,7 @@ export function mountTrace(root: HTMLElement) {
           ? 'The market is moving. Anything drawn beyond the lock boundary is sent as an order' +
             (!$<HTMLInputElement>('armed').checked ? ' once you tick Armed' : '') +
             '; the past is frozen.'
-          : 'Press Start live chart. The clock runs from the first second against the real BTC feed, and a sketch made now becomes the opening proposal.'
+          : `Press Start live chart. The clock runs from the first second against the real ${base()} feed, and a sketch made now becomes the opening proposal.`
       } <button id="toPlanFirst" class="btn small">Prefer to plan first?</button></div>`;
     else
       h += `<div class="authorize"><label class="check"><input id="ack" type="checkbox" ${S.phase === 'REVIEWED' || locked ? 'checked' : ''} ${locked ? 'disabled' : ''}> I have read the plan above</label>
@@ -771,6 +774,11 @@ export function mountTrace(root: HTMLElement) {
 
   /** Start a whole new session: a new recording of the live feed from t = 0. */
   function newSession(symbol?: string) {
+    // A torn-down controller must never open a socket. React invokes effects twice in
+    // development, so an async that was already in flight can land here after cleanup;
+    // without this the orphan starts a feed nothing holds a reference to any more, and
+    // it keeps writing the shared panels for the life of the page.
+    if (ac.signal.aborted) return;
     const sym = symbol ?? feed.symbol;
     unsubFeed();
     feed.stop();
@@ -778,8 +786,8 @@ export function mountTrace(root: HTMLElement) {
     unsubFeed = feed.onChange(onFeed);
     void feed.start();
     autoStarted = false;
+    toleranceSet = false;
     showLiveliness();
-    applyMarketTolerance();
     S.strokes = [];
     S.overrides = NO_OVERRIDES();
     S.refPrice = 0;
@@ -946,7 +954,7 @@ export function mountTrace(root: HTMLElement) {
     }
     $('lvPrice').textContent = fmtPrice(s.p);
     $('lvPos').textContent = s.pos
-      ? `${s.pos.d > 0 ? 'long' : 'short'} ${s.pos.Q.toFixed(5)} BTC`
+      ? `${s.pos.d > 0 ? 'long' : 'short'} ${s.pos.Q.toFixed(5)} ${base()}`
       : 'flat';
     $('lvPos').className = s.pos ? (s.pos.d > 0 ? 'pos' : 'neg') : '';
     $('lvEquity').textContent = fmtUSD(s.eq);
@@ -962,7 +970,7 @@ export function mountTrace(root: HTMLElement) {
     const r = S.res || S.sim!.result();
     const c = S.cfg;
     const err = forecastError(S.plan!, { N: 0, prices: [], at: priceAt });
-    let h = `<h2>Actual result</h2><div class="proj"><small>Net P&amp;L from fills</small><b class="big" style="color:var(--${r.net >= 0 ? 'long' : 'short'})">${fmtUSD(r.net, true)}</b><small>Ended by ${labelReason(r.endReason)} at ${fmtT(r.endT)}, against the real BTC price.</small></div>`;
+    let h = `<h2>Actual result</h2><div class="proj"><small>Net P&amp;L from fills</small><b class="big" style="color:var(--${r.net >= 0 ? 'long' : 'short'})">${fmtUSD(r.net, true)}</b><small>Ended by ${labelReason(r.endReason)} at ${fmtT(r.endT)}, against the real ${base()} price.</small></div>`;
     h += `<div class="kv"><span>Venue fees paid</span><span>${fmtUSD(r.fees)}</span><span>Net funding paid</span><span>${fmtUSD(r.funding)}</span><span>Lowest equity</span><span>${fmtUSD(r.minEq)}</span><span>Highest effective leverage</span><span>${r.maxLev ? r.maxLev.toFixed(2) + '×' : '—'}</span><span>Fills</span><span>${r.fills.length}</span><span>Forecast error (non-cash)</span><span>${err == null ? '—' : Math.round(err).toLocaleString() + ' bps'}</span><span>Redraws during the run</span><span>${r.commits}${r.replans.length > r.commits ? ` (${r.replans.length} live updates)` : ''}</span></div>`;
     h += `<h3>Same drawing${r.replans.length ? ' and redraws' : ''}, same recorded prices, other leverage</h3><table><tr><th>Leverage</th><th class="num">Net</th><th class="num">Lowest equity</th><th>Ended by</th></tr>`;
     for (const { L, r: x } of S.cmp!)
@@ -1284,49 +1292,52 @@ export function mountTrace(root: HTMLElement) {
         ctx.restore();
       }
 
-    // executable spine: the simplified vertices that will trade, lit by equity ink
+    // The executable spine, lit by equity ink. Legs and flats are drawn differently on
+    // purpose: a drawing that simplified to nothing but flats used to render as the same
+    // thick blue line as a real plan, so "no trade" looked identical to a trade.
     const items = [...p.legs, ...p.flats].sort((a, b) => a.t0 - b.t0);
-    const vsegs: { x: number; y: number }[][] = [];
-    let curSeg = -1;
-    let acc: { x: number; y: number }[] | null = null;
+    const legLen = (it: Leg) =>
+      Math.hypot(xOfT(it.t1) - xOfT(it.t0), yOfP(it.p1) - yOfP(it.p0));
+    let budget =
+      p.legs.reduce((a, l) => a + legLen(l), 0) * (S.sim ? s.ink : 1);
+
     for (const it of items) {
-      if (it.seg !== curSeg) {
-        acc = [{ x: xOfT(it.t0), y: yOfP(it.p0) }];
-        vsegs.push(acc);
-        curSeg = it.seg;
-      }
-      acc!.push({ x: xOfT(it.t1), y: yOfP(it.p1) });
-    }
-    let total = 0;
-    for (const sg of vsegs)
-      for (let i = 1; i < sg.length; i++)
-        total += Math.hypot(sg[i].x - sg[i - 1].x, sg[i].y - sg[i - 1].y);
-    let budget = total * (S.sim ? s.ink : 1);
-    for (const sg of vsegs) {
+      const xa = xOfT(it.t0);
+      const ya = yOfP(it.p0);
+      const xb = xOfT(it.t1);
+      const yb = yOfP(it.p1);
       ctx.save();
-      ctx.strokeStyle = 'rgba(46,79,216,.22)';
-      ctx.lineWidth = 6;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
-      ctx.beginPath();
-      ctx.moveTo(sg[0].x, sg[0].y);
-      for (let i = 1; i < sg.length; i++) ctx.lineTo(sg[i].x, sg[i].y);
-      ctx.stroke();
-      ctx.restore();
-      for (let i = 1; i < sg.length && budget > 0; i++) {
-        const len = Math.hypot(sg[i].x - sg[i - 1].x, sg[i].y - sg[i - 1].y);
-        const u = Math.min(1, budget / (len || 1e-9));
-        budget -= len;
-        ctx.save();
-        ctx.strokeStyle = '#2E4FD8';
-        ctx.lineWidth = 6;
-        ctx.lineCap = 'round';
+      if (it.dir === 0) {
+        // A flat holds no position, so it is drawn as the flat hatching colour, dashed.
+        ctx.strokeStyle = 'rgba(154,163,174,.85)';
+        ctx.lineWidth = 3;
+        ctx.setLineDash([5, 4]);
         ctx.beginPath();
-        ctx.moveTo(sg[i - 1].x, sg[i - 1].y);
-        ctx.lineTo(lerp(sg[i - 1].x, sg[i].x, u), lerp(sg[i - 1].y, sg[i].y, u));
+        ctx.moveTo(xa, ya);
+        ctx.lineTo(xb, yb);
         ctx.stroke();
-        ctx.restore();
+      } else {
+        ctx.strokeStyle = 'rgba(46,79,216,.22)';
+        ctx.lineWidth = 6;
+        ctx.beginPath();
+        ctx.moveTo(xa, ya);
+        ctx.lineTo(xb, yb);
+        ctx.stroke();
+        if (budget > 0) {
+          const len = legLen(it);
+          const u = Math.min(1, budget / (len || 1e-9));
+          budget -= len;
+          ctx.strokeStyle = '#2E4FD8';
+          ctx.lineWidth = 6;
+          ctx.beginPath();
+          ctx.moveTo(xa, ya);
+          ctx.lineTo(lerp(xa, xb, u), lerp(ya, yb, u));
+          ctx.stroke();
+        }
       }
+      ctx.restore();
     }
 
     // leg markers
@@ -1503,7 +1514,22 @@ export function mountTrace(root: HTMLElement) {
     }
     ctx.restore();
 
-    if (p.simplified && !S.sim) {
+    if (S.strokes.length && !p.legs.length) {
+      ctx.fillStyle = '#9A6200';
+      ctx.textAlign = 'left';
+      ctx.font = font('600 12px');
+      ctx.fillText(
+        `No trade: every stretch you drew moves less than the ±${fmtUSD((c.refPrice * c.tolPct) / 100)} tolerance.`,
+        x0 + 8,
+        y1 - 26,
+      );
+      ctx.font = font('12px');
+      ctx.fillText(
+        'Draw a steeper move, or lower Simplify tolerance in the configurator.',
+        x0 + 8,
+        y1 - 10,
+      );
+    } else if (p.simplified && !S.sim) {
       ctx.fillStyle = '#9A6200';
       ctx.textAlign = 'left';
       ctx.font = font('600 12px');
@@ -2305,7 +2331,7 @@ export function mountTrace(root: HTMLElement) {
     const rr = S.sim ? S.res || S.sim.result() : null;
     const data = {
       exportedAt: new Date().toISOString(),
-      spec: 'Trace v4.2 concept prototype, live BTC feed',
+      spec: 'Trace v4.2 concept prototype, live perpetual feed',
       config: S.cfg,
       feed: { source: feed.snapshot.source, status: feed.snapshot.status, t0Ms: feed.tape.t0Ms },
       strokes: S.strokes,
@@ -2399,7 +2425,7 @@ export function mountTrace(root: HTMLElement) {
     g.font = font(`${f * 0.85}px`);
     g.fillStyle = '#5E6774';
     g.fillText(
-      `${c.mode === 'path' ? 'Follow my path' : 'Single trade'}, ${fmtUSD0(c.margin)} margin at ${c.leverage}×, ${S.plan!.legs.length} leg${S.plan!.legs.length === 1 ? '' : 's'}, ${fmtT(S.playT)} of ${fmtT(c.horizonSec)}, live BTC/USD`,
+      `${c.mode === 'path' ? 'Follow my path' : 'Single trade'}, ${fmtUSD0(c.margin)} margin at ${c.leverage}×, ${S.plan!.legs.length} leg${S.plan!.legs.length === 1 ? '' : 's'}, ${fmtT(S.playT)} of ${fmtT(c.horizonSec)}, live ${feed.symbol}`,
       f * 1.6 + tw,
       top / 2,
     );
@@ -2566,20 +2592,27 @@ export function mountTrace(root: HTMLElement) {
   let marketChosen = false;
   /** Once you edit the tolerance yourself, the market no longer sets it. */
   let tolTouched = false;
+  let toleranceSet = false;
 
   /**
-   * A move counts as a leg when it is a couple of percent of what the market covers in
-   * a day. One fixed percentage cannot serve both ends of the list: 0.05% of price is
-   * about right for BTC, which ranges 2.5% a day, and far too tight for a perp that
-   * ranges 13%, where every tick would become its own trade.
+   * How big a drawn move has to be before it counts as a leg.
+   *
+   * Anchored to what the market covers in a few *minutes*, not in a day. A day-scale
+   * tolerance is far too coarse for hand-drawn turns: on a perp ranging 13% daily it
+   * came out at $3, which quietly absorbed every wiggle of a zigzag and collapsed it
+   * into one straight leg. A deliberate turn is a small fraction of recent range;
+   * anything below that is pen jitter.
    */
   function applyMarketTolerance() {
     if (tolTouched) return;
-    const m = markets.find((x) => x.symbol === feed.symbol);
-    if (!m || !(m.livelinessPct > 0)) return;
-    const tol = clamp(m.livelinessPct * 0.02, 0.005, 1);
+    const price = feed.tape.last || S.refPrice;
+    const range = feed.tape.recentRange(3);
+    if (!price || !(range > 0)) return;
+    const tol = clamp((range / price) * 100 * 0.05, 0.001, 1);
     $<HTMLInputElement>('tolPct').value = String(Math.round(tol * 1000) / 1000);
     readCfg();
+    renderReview();
+    draw();
   }
 
   function showLiveliness() {
@@ -2592,9 +2625,9 @@ export function mountTrace(root: HTMLElement) {
 
   async function loadMarkets() {
     try {
-      const res = await fetch('/api/markets', { cache: 'no-store' });
+      const res = await fetch('/api/markets', { cache: 'no-store', signal: ac.signal });
       const j = (await res.json()) as { markets?: MarketRow[] };
-      if (!j.markets?.length) return;
+      if (ac.signal.aborted || !j.markets?.length) return;
       markets = j.markets;
       const sel = $<HTMLSelectElement>('marketPick');
       sel.innerHTML = markets
@@ -2643,6 +2676,10 @@ export function mountTrace(root: HTMLElement) {
         : '—';
     $('feedPrice').textContent = s.price ? fmtPrice(s.price) : '—';
     $('feedTicks').textContent = String(s.ticks);
+    if (s.historyLoaded && !toleranceSet && feed.tape.candles.length) {
+      toleranceSet = true;
+      applyMarketTolerance();
+    }
     $('hdrPrice').textContent = s.price
       ? s.price.toLocaleString('en-US', { maximumFractionDigits: 2 })
       : '—';
@@ -2672,6 +2709,18 @@ export function mountTrace(root: HTMLElement) {
     autoStarted = true;
     startLive();
   }
+
+  // A development-only window onto the compiled plan. The spine is the end of a long
+  // pipeline (sample → rdp → absorbWobble → collapse → leg budget) and when a drawing
+  // does not trade, the only way to find out which stage ate it is to read the stages.
+  if (process.env.NODE_ENV === 'development')
+    (window as unknown as { __trace: unknown }).__trace = {
+      plan: () => S.plan,
+      strokes: () => S.strokes,
+      cfg: () => S.cfg,
+      feed: () => feed,
+      state: () => S,
+    };
 
   const teardownPopovers = mountPopovers(root);
   void loadMarkets();

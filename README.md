@@ -53,8 +53,10 @@ made the app non-functional. Both are still editable fields, and only the defaul
 
 | Field | Was | Now | Why |
 | --- | --- | --- | --- |
-| Simplify tolerance | 0.25% of price | **0.05%** (min 0.005) | 0.25% of $77k is $192. Every realistic drawing was smaller than that, so every plan compiled to "flat" and nothing traded. The field now prints its dollar value underneath, and Review offers a one-click halve if a drawing still reads as flat. |
+| Simplify tolerance | 0.25% of price | **derived from the market** (min 0.001) | 0.25% of $77k is $192. Every realistic drawing was smaller than that, so every plan compiled to "flat" and nothing traded. It is now set from the range of the last three minutes — 5% of it — because the threshold for "this turn was deliberate" belongs on the timescale you draw at, not the timescale of a day. Deriving it from the *daily* range was a real regression: on a perp ranging 13% a day it came out at $3 and silently ate every swing of a zigzag, so a clean six-swing drawing compiled to zero legs and read as flat. Editing the field yourself stops the market setting it. |
 | Price axis range | ±15% | **±0.4%** (min 0.1) | Display only — it never moves an order. At ±15% a real session is a flat line across the middle of the chart. |
+| Time columns | 64 | **256** | The grid the drawing is quantised onto. Each column keeps one price — the midpoint of what the stroke covered inside it — so a feature narrower than a column is averaged away. At 64 columns over a fifteen-minute horizon a column is 14 seconds, while the chart is zoomed to a three-minute window where 14 seconds is a fifth of an inch: whole zigzag swings landed inside one column and vanished. An eight-swing zigzag compiled to four legs, a ten-swing one to two, and shifting the drawing sideways by half a column changed the answer. At 256 the column is 3.5 seconds and an *n*-swing zigzag compiles to *n* legs. |
+| Minimum gap | 2 columns | **8 columns** | Purely to hold the two thresholds that are measured in columns — wobble absorption and gap-to-flat — at the same *duration* after the grid got four times finer. 8 × 3.5s = 28s, exactly 2 × 14s. |
 
 Everything else keeps its original default, including the $30 plan loss limit and the $20
 take profit. Worth knowing what those mean here: $30 against $300 of exposure is a 10% BTC
