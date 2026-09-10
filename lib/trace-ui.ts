@@ -85,6 +85,8 @@ export function mountTrace(root: HTMLElement) {
     dirty: false,
     resultsShown: false,
     yRange: 0.4,
+    /** Price axis follows the data until you touch a price control. */
+    yAuto: true,
     view: { t0: 0, t1: 900, pc: 0 },
     pan: null as { x: number; y: number; t0: number; t1: number; pc: number } | null,
     live: null as LiveEdit | null,
@@ -182,19 +184,19 @@ export function mountTrace(root: HTMLElement) {
   // ---------- view (zoom and pan are display only; orders never change) ----------
   function resetView(redraw = true) {
     S.view = { t0: 0, t1: S.cfg.horizonSec, pc: 0 };
-    $<HTMLInputElement>('yRange').value = '0.4';
-    S.yRange = 0.4;
-    $('yRangeVal').textContent = '±0.4%';
+    // Reset hands the price axis back to auto; it will refit to the data on the next frame.
+    S.yAuto = true;
+    setYRange(0.1);
     if (redraw) {
       updateViewLabel();
       draw();
     }
   }
   function setYRange(r: number) {
-    r = clamp(r, 0.1, 30);
-    const v = Math.round(r * 10) / 10;
-    $<HTMLInputElement>('yRange').value = String(v);
+    const v = Math.round(clamp(r, 0.005, 30) * 1000) / 1000;
+    if (Math.abs(v - S.yRange) < 1e-9) return;
     S.yRange = v;
+    $<HTMLInputElement>('yRange').value = String(v);
     $('yRangeVal').textContent = `±${v}%`;
   }
   function zoomTime(factor: number, atT?: number) {
@@ -229,6 +231,7 @@ export function mountTrace(root: HTMLElement) {
     draw();
   }
   function zoomPrice(factor: number, atPct?: number) {
+    S.yAuto = false;
     const old = S.yRange;
     setYRange(old * factor);
     if (atPct != null) S.view.pc = atPct - (atPct - S.view.pc) * (S.yRange / old);
@@ -237,11 +240,13 @@ export function mountTrace(root: HTMLElement) {
     draw();
   }
   function panPrice(dir: number) {
+    S.yAuto = false;
     S.view.pc = clamp(S.view.pc + dir * S.yRange * 0.25, -95, 500);
     updateViewLabel();
     draw();
   }
   function fitView() {
+    S.yAuto = false;
     const pts = S.strokes.flat();
     if (!pts.length) {
       resetView();
@@ -249,8 +254,8 @@ export function mountTrace(root: HTMLElement) {
     }
     let tmin = Infinity;
     let tmax = -Infinity;
-    let lo = 0;
-    let hi = 0;
+    let lo = Infinity;
+    let hi = -Infinity;
     for (const q of pts) {
       tmin = Math.min(tmin, q.t);
       tmax = Math.max(tmax, q.t);
@@ -258,6 +263,14 @@ export function mountTrace(root: HTMLElement) {
       lo = Math.min(lo, pct);
       hi = Math.max(hi, pct);
     }
+    // Include the market that has printed so far, so Fit frames the whole picture.
+    if (S.sim)
+      for (const q of S.sim.series) {
+        if (q.p <= 0 || q.t < tmin || q.t > tmax) continue;
+        const pct = (q.p / S.cfg.refPrice - 1) * 100;
+        lo = Math.min(lo, pct);
+        hi = Math.max(hi, pct);
+      }
     const padT = Math.max((tmax - tmin) * 0.08, S.cfg.horizonSec / 100);
     S.view.t0 = Math.max(0, tmin - padT);
     S.view.t1 = Math.min(S.cfg.horizonSec, tmax + padT);
@@ -266,10 +279,56 @@ export function mountTrace(root: HTMLElement) {
       S.view.t1 = S.cfg.horizonSec;
     }
     S.view.pc = (lo + hi) / 2;
-    setYRange(Math.max(0.1, ((hi - lo) / 2) * 1.25));
+    setYRange(Math.max(0.005, ((hi - lo) / 2) * 1.25));
     updateViewLabel();
     draw();
   }
+  /**
+   * Fit the price axis to what is actually on screen. BTC covers a few tenths of a
+   * percent in half an hour and only a few dollars in the first seconds, so any fixed
+   * range is either far too wide to read or too tight to hold the session. Easing
+   * toward the target keeps a new tick from making the axis jump.
+   */
+  function autoFitPrice() {
+    const c = S.cfg;
+    const { t0, t1 } = S.view;
+    let lo = Infinity;
+    let hi = -Infinity;
+    const see = (v?: number | null) => {
+      if (v == null || !Number.isFinite(v) || v <= 0) return;
+      lo = Math.min(lo, v);
+      hi = Math.max(hi, v);
+    };
+    if (S.sim) {
+      const ser = S.sim.series;
+      const n = clamp(
+        Math.floor((S.playT / c.horizonSec) * S.sim.N),
+        0,
+        Math.max(0, ser.length - 1),
+      );
+      for (let i = 0; i <= n; i++) if (ser[i].t >= t0 && ser[i].t <= t1) see(ser[i].p);
+    }
+    for (const st of S.strokes) for (const q of st) if (q.t >= t0 && q.t <= t1) see(q.p);
+    if (S.plan)
+      for (const l of S.plan.legs)
+        if (l.t1 >= t0 && l.t0 <= t1) {
+          see(l.p0);
+          see(l.p1);
+        }
+    see(feed.tape.last);
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return;
+    const mid = (lo + hi) / 2;
+    // The floor is tied to the simplify tolerance, not to a fixed number of dollars.
+    // Zooming tighter than the tolerance makes the chart unusable: a stroke spanning the
+    // whole height would still be a smaller move than the threshold for counting as a
+    // leg, so every drawing would read as flat and nothing could ever be traded.
+    const tolUsd = (c.refPrice * c.tolPct) / 100;
+    const half = Math.max(((hi - lo) / 2) * 1.35, tolUsd * 1.6, c.refPrice * 0.00005);
+    S.view.pc = lerp(S.view.pc, (mid / c.refPrice - 1) * 100, 0.12);
+    setYRange(lerp(S.yRange, (half / c.refPrice) * 100, 0.12));
+    updateViewLabel();
+  }
+
   function updateViewLabel() {
     const v = S.view;
     $('viewLabel').textContent = `View ${fmtT(v.t0)}–${fmtT(v.t1)} of ${fmtT(S.cfg.horizonSec)}, price ${v.pc >= 0 ? '+' : ''}${v.pc.toFixed(2)}% ± ${S.yRange}%. Zoom and pan change the view only; orders do not move.`;
@@ -592,6 +651,9 @@ export function mountTrace(root: HTMLElement) {
 
   // ---------- run ----------
   function beginRun() {
+    // Starting before the first price would seed the simulator with at() === 0, which
+    // bakes zeros into its series and draws the market as a spike off the bottom.
+    if (!feed.tape.count) return;
     S.refPrice = feed.tape.last || S.refPrice;
     readCfg();
     S.plan = compile(S.strokes, S.cfg, S.overrides);
@@ -628,6 +690,7 @@ export function mountTrace(root: HTMLElement) {
   }
 
   function startLive() {
+    if (!feed.tape.count) return;
     S.pendingRestart = false;
     $('restartNote').hidden = true;
     S.follow = true;
@@ -971,8 +1034,10 @@ export function mountTrace(root: HTMLElement) {
     draw();
   }
 
+  let exporting = false;
   function draw() {
     if (!S.cfg || !S.plan) return;
+    if (S.yAuto && !exporting) autoFitPrice();
     const c = S.cfg;
     const H = c.horizonSec;
     const p = S.plan;
@@ -1903,6 +1968,7 @@ export function mountTrace(root: HTMLElement) {
       'input',
       () => {
       if (el.id === 'yRange') {
+        S.yAuto = false;
         readCfg();
         updateViewLabel();
         draw();
@@ -2214,6 +2280,7 @@ export function mountTrace(root: HTMLElement) {
       view: { ...S.view },
       yRange: S.yRange,
     };
+    exporting = true;
     ctx = target.getContext('2d')!;
     W = w;
     HH = h;
@@ -2236,6 +2303,7 @@ export function mountTrace(root: HTMLElement) {
       PAD.b = saved.b;
       S.view = saved.view;
       S.yRange = saved.yRange;
+      exporting = false;
     }
   }
   const chartBuf = root.ownerDocument.createElement('canvas');
@@ -2449,6 +2517,7 @@ export function mountTrace(root: HTMLElement) {
     if (!S.refPrice && s.price) {
       S.refPrice = s.price;
       recompile();
+      maybeAutoStart();
     } else if (!S.sim) {
       $('refPriceVal').textContent = S.refPrice
         ? `${fmtPrice(S.refPrice)} at start`
@@ -2457,6 +2526,14 @@ export function mountTrace(root: HTMLElement) {
   }
 
   // ---------- boot ----------
+  let autoStarted = false;
+  /** The live chart starts itself, but only once there is a price to start against. */
+  function maybeAutoStart() {
+    if (autoStarted || S.mode !== 'live' || S.phase !== 'DRAFT' || !feed.tape.count) return;
+    autoStarted = true;
+    startLive();
+  }
+
   const teardownPopovers = mountPopovers(root);
   unsubFeed = feed.onChange(onFeed);
   void feed.start();
@@ -2469,10 +2546,9 @@ export function mountTrace(root: HTMLElement) {
   $('planSteps').hidden = true;
   $('liveStart').hidden = false;
   raf = requestAnimationFrame(loop);
-  // Give the feed a moment to deliver a first price, then start the clock.
-  const bootTimer = setTimeout(() => {
-    if (S.phase === 'DRAFT' && S.mode === 'live') startLive();
-  }, 1200);
+  // The feed normally starts the clock as soon as the first price lands; this is only a
+  // backstop for the case where every source is unreachable.
+  const bootTimer = setTimeout(maybeAutoStart, 12000);
   const teardownCoach = mountCoachMarks(() => showTab('guide'));
 
   return () => {

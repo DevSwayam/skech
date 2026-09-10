@@ -119,12 +119,12 @@ export default function TraceApp() {
           </div>
           <div className="row">
             <label htmlFor="yRange">Price axis range (view only)</label>
-            <input id="yRange" type="range" min="0.1" max="30" step="0.1" defaultValue="0.4" />
+            <input id="yRange" type="range" min="0.005" max="30" step="0.005" defaultValue="0.1" />
           </div>
           <div className="row">
             <label />
             <span className="val" id="yRangeVal">
-              ±0.4%
+              auto
             </span>
           </div>
           <div className="check">
