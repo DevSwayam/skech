@@ -81,6 +81,11 @@ body.sizing-risk .row[data-mode=risk]{display:flex}
 /* stage */
 .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:.5rem}
 .toolbar .spacer{flex:1}
+/* An unpressed option was drawn in --muted, the same grey used for secondary text, so
+   next to a solid dark active option it read as unavailable. The 'how the drawing is
+   read' segment already used --ink for this reason; every toolbar segment now matches. */
+.toolbar .seg button{color:var(--ink)}
+.toolbar .seg button:hover:not([aria-pressed=true]){background:var(--paper)}
 .seg.mode button{padding:.35rem .7rem;color:var(--ink)}
 .seg.mode button[aria-pressed=true]{background:var(--blue);color:#fff}
 #modeHint{max-width:22rem}

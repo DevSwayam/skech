@@ -360,7 +360,7 @@ export function mountTrace(root: HTMLElement) {
       ? 'Loading the live BTC price…'
       : S.mode === 'live'
         ? 'Live chart. Draw ahead of the lock boundary to place an order: rising means long, falling means short, lifting the pen means flat.'
-        : 'Draw your plan. Rising means long, falling means short, lifting the pen means flat.';
+        : 'Draw your plan on a still chart. Rising means long, falling means short, lifting the pen means flat. When it looks right, tick the box at the bottom of Review and press Authorize and run.';
     $('modeHint').textContent =
       S.cfg.mode === 'path'
         ? 'Every turn becomes a scheduled leg; a lifted pen means flat.'
