@@ -41,7 +41,13 @@ export class PriceTape {
     this.candles = candles.slice().sort((a, b) => a.t - b.t);
     const last = this.candles[this.candles.length - 1];
     if (last && !this.ts.length) {
-      this.ts.push((last.t + CANDLE_MS - this.t0Ms) / 1000);
+      // The final candle is usually the *in-progress* minute, so its close time is in
+      // the future. The seed only means "this was the price as the session began", so it
+      // has to sit at or before t = 0. Left in the future it becomes the newest tick,
+      // `push` clamps every live tick onto it, and `at()` returns one frozen price —
+      // a flat chart, and a simulator trading against a market that never moves.
+      const t = Math.min(0, (last.t + CANDLE_MS - this.t0Ms) / 1000);
+      this.ts.push(t);
       this.ps.push(last.c);
     }
   }

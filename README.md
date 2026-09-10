@@ -108,6 +108,13 @@ the chart freezes while the header still says "Live", which is the most misleadi
 the app could be in. `LiveFeed` watches the time since the last tick and, after fifteen
 seconds of silence, shows **Stalled — reconnecting** and rebuilds the connection.
 
+**The seeded price has to sit in the past.** History's final candle is usually the
+*in-progress* minute, so its close time is up to sixty seconds in the future. Seeding the
+tape at that timestamp made it the newest tick, so `push` clamped every arriving live tick
+onto it and `at()` answered one frozen price for the whole first minute — a dead-flat
+chart, and a simulator trading against a market that never moved. The seed is now pinned
+to `t <= 0`, which is all it ever meant: the price as the session began.
+
 **The lock boundary must come from the wall clock.** It used to be derived from
 `sim.tNow`, the simulator's stepped position, which only advances inside the animation
 loop — and browsers throttle that loop in a background or occluded tab. Coming back to a
