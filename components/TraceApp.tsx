@@ -582,6 +582,9 @@ export default function TraceApp() {
             Net P&amp;L<b id="lvPnl">—</b>
           </div>
           <div>
+            Break-even<b id="lvBreakEven">—</b>
+          </div>
+          <div>
             Effective leverage<b id="lvLev">—</b>
           </div>
           <div>

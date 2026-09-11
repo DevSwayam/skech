@@ -16,8 +16,8 @@ interface Step {
 
 const STEPS: Step[] = [
   {
-    title: 'Draw what you think BTC does next',
-    body: 'The chart is the real BTC/USD price. The vertical line is <b>now</b>; everything to the right of it is empty, because it has not happened yet. Drag across that empty space to draw the shape you expect. A stroke going <b>up</b> is a <b>long</b> (you profit if price rises). A stroke going <b>down</b> is a <b>short</b>. Lifting the pen leaves a gap, and a gap means you hold nothing.',
+    title: 'Draw what you think {SYM} does next',
+    body: 'The chart is the real {SYM} price. The vertical line is <b>now</b>; everything to the right of it is empty, because it has not happened yet. Drag across that empty space to draw the shape you expect. A stroke going <b>up</b> is a <b>long</b> (you profit if price rises). A stroke going <b>down</b> is a <b>short</b>. Lifting the pen leaves a gap, and a gap means you hold nothing.',
     svg: () =>
       chart((ch) =>
         ch
@@ -79,7 +79,7 @@ const STEPS: Step[] = [
   },
   {
     title: 'Your two safety rails',
-    body: 'The <b>take profit</b> ends the plan as soon as you are up by that many dollars; the <b>plan loss limit</b> ends it if you are down by that much. Both are dollar amounts, and both are drawn on the chart so you can see the price they need. Watch that price: $30 against $300 of exposure is a 10% BTC move, which will not happen in half an hour — a limit that far away is not really a stop.',
+    body: 'The <b>take profit</b> ends the plan as soon as you are up by that many dollars; the <b>plan loss limit</b> ends it if you are down by that much. Both are dollar amounts, and both are drawn on the chart so you can see the price they need. Watch that price: $30 against $300 of exposure is a 10% move, which on a quiet market will not happen in half an hour — a limit that far away is not really a stop, while on a fast one it can be reached in minutes.',
     svg: () =>
       chart((ch) =>
         ch
@@ -106,7 +106,7 @@ const STEPS: Step[] = [
   },
   {
     title: 'Two numbers worth understanding first',
-    body: 'BTC only travels a few tenths of a percent in half an hour, which makes two settings matter more than the rest. <b>Simplify tolerance</b> is how big a move must be to count as a leg — the dollar value is printed under the field, and setting it too high makes the whole drawing read as flat. <b>Price axis range</b> is display only, but at ±15% a real BTC session looks like a flat line; a few tenths of a percent is what makes it legible.',
+    body: 'How far a market travels in half an hour varies enormously across the list — a few tenths of a percent on {SYM}-scale majors, tens of percent on the liveliest perps — which makes two settings matter more than the rest. <b>Simplify tolerance</b> is how big a move must be to count as a leg — the dollar value is printed under the field, and setting it too high makes the whole drawing read as flat. <b>Price axis range</b> is display only, but at ±15% a quiet session looks like a flat line; a few tenths of a percent is what makes it legible.',
   },
   {
     title: 'What it does not model',
@@ -114,15 +114,19 @@ const STEPS: Step[] = [
   },
 ];
 
-export function guideHtml() {
-  return (
+/** The guide names the asset you are actually trading, not the one it was written for. */
+const sym = (s: string, base: string) => s.replace(/\{SYM\}/g, base);
+
+export function guideHtml(base = 'BTC') {
+  return sym(
     `<h2>How Trace works</h2>` +
-    `<p class="guide-intro">You draw a line on a live BTC chart. Trace reads the drawing as a set of scheduled orders and runs them against the real price, with paper money. Nine things to know:</p>` +
+    `<p class="guide-intro">You draw a line on a live {SYM} chart. Trace reads the drawing as a set of scheduled orders and runs them against the real price, with paper money. Nine things to know:</p>` +
     STEPS.map(
       (s, i) =>
         `<section class="guide-step"><h4><i>${i + 1}</i>${s.title}</h4><p>${s.body}</p>${s.svg ? s.svg() : ''}</section>`,
     ).join('') +
-    `<section class="guide-step"><h4>Reading the chart</h4><p>The legend under the chart names every mark, and the <b>Terms</b> tab explains the trading vocabulary with a diagram each. Hover the ⓘ next to any configurator field for what that field does.</p></section>`
+    `<section class="guide-step"><h4>Reading the chart</h4><p>The legend under the chart names every mark, and the <b>Terms</b> tab explains the trading vocabulary with a diagram each. Hover the ⓘ next to any configurator field for what that field does.</p></section>`,
+    base,
   );
 }
 
@@ -140,7 +144,7 @@ interface Coach {
 const COACH: Coach[] = [
   {
     target: '.canvas-wrap',
-    title: 'This is the real BTC price',
+    title: 'This is the real {SYM} price',
     body: 'The clock is already running. Drag across the empty space to the right of the now line to draw what you think price will do — up is a long, down is a short.',
     side: 'inside-bottom',
   },
@@ -165,7 +169,12 @@ const COACH: Coach[] = [
 ];
 
 /** Returns a teardown function. Does nothing if the user has already seen it. */
-export function mountCoachMarks(onOpenGuide: () => void) {
+/**
+ * `baseOf` is a getter, not a string: the coach marks mount at boot, while the feed is
+ * still on the default symbol, and the market list only resolves a moment later. Reading
+ * it per render is what makes the card name the asset actually on screen.
+ */
+export function mountCoachMarks(onOpenGuide: () => void, baseOf: () => string = () => 'BTC') {
   let seen = false;
   try {
     seen = localStorage.getItem(FLAG) === '1';
@@ -235,7 +244,7 @@ export function mountCoachMarks(onOpenGuide: () => void) {
     const s = COACH[step];
     const last = step === COACH.length - 1;
     card.innerHTML =
-      `<h4>${s.title}</h4><p>${s.body}</p>` +
+      `<h4>${sym(s.title, baseOf())}</h4><p>${sym(s.body, baseOf())}</p>` +
       `<footer><span class="dots">${COACH.map((_, i) => `<i class="${i === step ? 'on' : ''}"></i>`).join('')}</span>` +
       `<button class="btn small quiet" data-act="skip">Skip</button>` +
       (step > 0 ? `<button class="btn small" data-act="back">Back</button>` : '') +
@@ -265,12 +274,19 @@ export function mountCoachMarks(onOpenGuide: () => void) {
     if (e.key === 'Escape') done();
   };
   const onResize = () => place();
+  // The traded market is chosen a beat after boot, once the market list lands. The card
+  // is already on screen by then, so it has to be told to redraw with the real name.
+  const onSymbol = () => {
+    if (card.isConnected) render();
+  };
   document.addEventListener('keydown', onKey);
+  document.addEventListener('trace:symbol', onSymbol);
   window.addEventListener('resize', onResize);
   window.addEventListener('scroll', onResize, true);
 
   function teardown() {
     document.removeEventListener('keydown', onKey);
+    document.removeEventListener('trace:symbol', onSymbol);
     window.removeEventListener('resize', onResize);
     window.removeEventListener('scroll', onResize, true);
     ring.remove();

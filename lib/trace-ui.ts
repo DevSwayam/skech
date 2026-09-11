@@ -134,7 +134,11 @@ export function mountTrace(root: HTMLElement) {
       tolPct: Math.max(0.001, n('tolPct')),
       legBudget: Math.round(n('legBudget')) > 0 ? Math.round(n('legBudget')) : Infinity,
       mode: $('modePath').getAttribute('aria-pressed') === 'true' ? 'path' : 'single',
-      refPrice: Math.max(1, ref),
+      // Only a guard against dividing by zero. It used to floor at $1, which silently
+      // broke every sub-dollar perp — and those are the liveliest ones, so the app
+      // opened on one by default: the axis anchored at $1 while the market traded at
+      // $0.13, and the view label read in the millions of percent.
+      refPrice: Math.max(1e-9, ref),
       margin: Math.max(1, n('margin')),
       leverage: parseInt(
         root.querySelector<HTMLElement>('[data-lev][aria-pressed=true]')!.dataset.lev!,
@@ -789,6 +793,7 @@ export function mountTrace(root: HTMLElement) {
     autoStarted = false;
     toleranceSet = false;
     showLiveliness();
+    document.dispatchEvent(new CustomEvent('trace:symbol'));
     S.strokes = [];
     S.overrides = NO_OVERRIDES();
     S.refPrice = 0;
@@ -958,6 +963,18 @@ export function mountTrace(root: HTMLElement) {
       ? `${s.pos.d > 0 ? 'long' : 'short'} ${s.pos.Q.toFixed(5)} ${base()}`
       : 'flat';
     $('lvPos').className = s.pos ? (s.pos.d > 0 ? 'pos' : 'neg') : '';
+    // The price this position has to reach just to have cost nothing. A long that is
+    // up but still below this line is losing, which is otherwise a mystery.
+    const beEl = $('lvBreakEven');
+    if (s.pos) {
+      const be = s.pos.P0 * (1 + (s.pos.d > 0 ? 1 : -1) * S.cfg.feeRate * 2);
+      const away = ((be / s.p - 1) * 100) * (s.pos.d > 0 ? 1 : -1);
+      beEl.textContent = `${fmtPrice(be)} (${away > 0 ? `${away.toFixed(3)}% away` : 'passed'})`;
+      beEl.className = away > 0 ? 'neg' : 'pos';
+    } else {
+      beEl.textContent = '—';
+      beEl.className = '';
+    }
     $('lvEquity').textContent = fmtUSD(s.eq);
     const pnl = s.eq - c.margin;
     $('lvPnl').textContent = fmtUSD(pnl, true);
@@ -1024,7 +1041,7 @@ export function mountTrace(root: HTMLElement) {
     }
     if (name === 'guide' && !guideRendered) {
       guideRendered = true;
-      $('tab-guide').innerHTML = guideHtml();
+      $('tab-guide').innerHTML = guideHtml(base());
     }
     root
       .querySelectorAll<HTMLElement>('.tabs [role=tab]')
@@ -1219,6 +1236,15 @@ export function mountTrace(root: HTMLElement) {
           y + 8,
         );
       };
+      // Break-even, drawn only while a position is open. Without it the most common
+      // surprise in the whole app is a leg that is green on the chart and red in the
+      // P&L: at 0.045% a side a round trip costs 0.09% of price, which on BTC is about
+      // $70, and a move smaller than that is a loss no matter which way it went.
+      const bePos = cur().pos;
+      if (bePos) {
+        const be = bePos.P0 * (1 + (bePos.d > 0 ? 1 : -1) * c.feeRate * 2);
+        line(be, '#9A6200', [3, 3], narrow() ? 'Break-even' : 'Break-even after fees');
+      }
       line(th.tp, '#1F8A5B', [6, 4], narrow() ? `TP +${fmtUSD0(c.tpTarget)}` : `Take profit +${fmtUSD0(c.tpTarget)}`);
       line(th.stop, '#C6412C', [6, 4], narrow() ? `Stop −${fmtUSD0(c.lossLimit)}` : `Stop, loss limit ${fmtUSD0(c.lossLimit)}`);
       line(th.liq, '#8E2A1B', [2, 4], narrow() ? 'Liq. est.' : 'Liquidation estimate');
@@ -1517,7 +1543,42 @@ export function mountTrace(root: HTMLElement) {
 
     drawCloseButton();
 
-    if (S.strokes.length && !p.legs.length) {
+    // Why nothing is trading, said on the chart. Both of these were previously only
+    // explained in the ledger, so the visible result was a confident blue spine, an
+    // empty order queue and no reason given.
+    const armedOn = $<HTMLInputElement>('armed').checked;
+    if (p.legs.length && S.phase !== 'RUN' && S.phase !== 'DONE') {
+      notice(
+        x0,
+        y1,
+        'This plan is not running yet, so nothing has been sent.',
+        S.mode === 'live'
+          ? 'Press “Start live chart” to run it against the market.'
+          : 'Tick the box at the bottom of Review, then press “Authorize and run”.',
+      );
+    } else if (S.phase === 'RUN' && S.sim && !S.sim.ended && p.legs.length && !armedOn) {
+      notice(
+        x0,
+        y1,
+        'Not armed: this drawing will not be sent.',
+        'Tick “Armed” above the chart to trade it.',
+      );
+    } else if (
+      S.phase === 'RUN' &&
+      S.sim &&
+      !S.sim.ended &&
+      armedOn &&
+      p.legs.length &&
+      !S.sim.queue(S.cfg.lockSec).length &&
+      !cur().pos
+    ) {
+      notice(
+        x0,
+        y1,
+        'Nothing queued: every leg you drew starts before now.',
+        'Draw to the right of the dashed now line — the past is already settled.',
+      );
+    } else if (S.strokes.length && !p.legs.length) {
       ctx.fillStyle = '#9A6200';
       ctx.textAlign = 'left';
       ctx.font = font('600 12px');
@@ -1706,6 +1767,19 @@ export function mountTrace(root: HTMLElement) {
    * moment a close can actually take effect — at the price the position is carrying, and
    * it only exists while there is something to close.
    */
+  /** A two-line note in the bottom-left of the plot, for states that need explaining. */
+  function notice(x0: number, y1: number, head: string, sub: string) {
+    ctx.save();
+    ctx.fillStyle = '#9A6200';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+    ctx.font = font('600 12px');
+    ctx.fillText(head, x0 + 8, y1 - 26);
+    ctx.font = font('12px');
+    ctx.fillText(sub, x0 + 8, y1 - 10);
+    ctx.restore();
+  }
+
   const toolCursor = (t: Tool) =>
     t === 'pan' || t === 'adjust' ? 'grab' : t === 'erase' ? 'col-resize' : 'crosshair';
 
@@ -1713,11 +1787,11 @@ export function mountTrace(root: HTMLElement) {
   function closeHit(): { x: number; y: number; r: number } | null {
     if (S.phase !== 'RUN' || !S.sim || S.sim.ended || S.reviewing) return null;
     if (!cur().pos) return null;
-    // Pinned to the right edge of the plot. Next to the boundary it landed on top of the
-    // equity ink and the price line — the busiest part of the chart — and was genuinely
-    // hard to pick out. Out here the future region is nearly always empty. Only a
-    // *pointerdown* on the disc closes, so a stroke dragged across it is unaffected.
-    const x = W - PAD.r - CLOSE_R - 10;
+    // Immediately to the *right* of the lock boundary: the first moment a close can take
+    // effect, and on the empty side of the line rather than buried in the price history
+    // and equity ink to its left. Only a *pointerdown* on the disc closes, so a stroke
+    // dragged across it on the way somewhere else is unaffected.
+    const x = clamp(xOfT(boundary()) + CLOSE_R + 6, PAD.l + CLOSE_R, W - PAD.r - CLOSE_R);
     const y = clamp(yOfP(cur().p), PAD.t + CLOSE_R, HH - PAD.b - CLOSE_R);
     return { x, y, r: CLOSE_R };
   }
@@ -2852,7 +2926,7 @@ export function mountTrace(root: HTMLElement) {
   // The feed normally starts the clock as soon as the first price lands; this is only a
   // backstop for the case where every source is unreachable.
   const bootTimer = setTimeout(maybeAutoStart, 12000);
-  const teardownCoach = mountCoachMarks(() => showTab('guide'));
+  const teardownCoach = mountCoachMarks(() => showTab('guide'), base);
 
   return () => {
     clearTimeout(bootTimer);
