@@ -977,9 +977,12 @@ export function mountTrace(root: HTMLElement) {
     // up but still below this line is losing, which is otherwise a mystery.
     const beEl = $('lvBreakEven');
     if (s.pos) {
-      const be = s.pos.P0 * (1 + (s.pos.d > 0 ? 1 : -1) * S.cfg.feeRate * 2);
-      const away = ((be / s.p - 1) * 100) * (s.pos.d > 0 ? 1 : -1);
-      beEl.textContent = `${fmtPrice(be)} (${away > 0 ? `${away.toFixed(3)}% away` : 'passed'})`;
+      const f = S.cfg.feeRate;
+      const be = s.pos.d > 0 ? (s.pos.P0 * (1 + f)) / (1 - f) : (s.pos.P0 * (1 - f)) / (1 + f);
+      const away = (be / s.p - 1) * 100 * (s.pos.d > 0 ? 1 : -1);
+      beEl.textContent = `${fmtPrice(be)} — ${
+        s.pos.d > 0 ? 'above' : 'below'
+      } to profit (${away > 0 ? `${away.toFixed(3)}% away` : 'passed'})`;
       beEl.className = away > 0 ? 'neg' : 'pos';
     } else {
       beEl.textContent = '—';
@@ -1252,8 +1255,15 @@ export function mountTrace(root: HTMLElement) {
       // $70, and a move smaller than that is a loss no matter which way it went.
       const bePos = cur().pos;
       if (bePos) {
-        const be = bePos.P0 * (1 + (bePos.d > 0 ? 1 : -1) * c.feeRate * 2);
-        line(be, '#9A6200', [3, 3], narrow() ? 'Break-even' : 'Break-even after fees');
+        // Exact, not the 1+2f approximation: fees are charged on both notionals, so
+        // P1(1-f) = P0(1+f) for a long and P1(1+f) = P0(1-f) for a short.
+        const f = c.feeRate;
+        const be =
+          bePos.d > 0 ? (bePos.P0 * (1 + f)) / (1 - f) : (bePos.P0 * (1 - f)) / (1 + f);
+        // Which side of the line you need to be on is the whole point, and a bare line
+        // does not say it: a short is in profit *below* its break-even, a long above.
+        const need = bePos.d > 0 ? 'need price above' : 'need price below';
+        line(be, '#9A6200', [3, 3], narrow() ? 'Break-even' : `Break-even — ${need}`);
       }
       line(th.tp, '#1F8A5B', [6, 4], narrow() ? `TP +${fmtUSD0(c.tpTarget)}` : `Take profit +${fmtUSD0(c.tpTarget)}`);
       line(th.stop, '#C6412C', [6, 4], narrow() ? `Stop −${fmtUSD0(c.lossLimit)}` : `Stop, loss limit ${fmtUSD0(c.lossLimit)}`);
@@ -1735,7 +1745,9 @@ export function mountTrace(root: HTMLElement) {
     ctx.shadowColor = 'rgba(15,23,42,.30)';
     ctx.shadowBlur = hot ? 12 : 7;
     ctx.shadowOffsetY = 2;
-    ctx.fillStyle = hot ? '#A8341F' : '#C6412C';
+    // Ink, not the short colour. In red it read as a short position sitting on the
+    // chart rather than as a control.
+    ctx.fillStyle = hot ? '#000000' : '#1B2431';
     ctx.beginPath();
     ctx.arc(b.x, b.y, r, 0, Math.PI * 2);
     ctx.fill();
