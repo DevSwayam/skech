@@ -12,7 +12,17 @@
  */
 import { CANDLE_MS, VENUES } from './feed';
 import { FEED_LABEL, LiveFeed, type FeedState } from './live-feed';
-import { clamp, fmtPrice, fmtT, fmtTSigned, fmtUSD, fmtUSD0, labelReason, lerp } from './format';
+import {
+  clamp,
+  fmtPrice,
+  fmtT,
+  fmtTSigned,
+  fmtUSD,
+  fmtUSD0,
+  fmtUSDPrecise,
+  labelReason,
+  lerp,
+} from './format';
 import { PATTERNS, PATTERN_SCALE } from './patterns';
 import { guideHtml, mountCoachMarks } from './trace-guide';
 import { GLOSS, mountPopovers } from './trace-info';
@@ -174,7 +184,7 @@ export function mountTrace(root: HTMLElement) {
     $('penSmoothVal').textContent = `${Math.round(S.cfg.penSmooth * 100)}%`;
     $('colWidthVal').textContent = `1 column = ${fmtDur(S.cfg.horizonSec / S.cfg.columns)}; gap_min = ${fmtDur((S.cfg.horizonSec / S.cfg.columns) * S.cfg.gapMin)}`;
     // The tolerance is the one setting that must be read in dollars to make sense here.
-    $('tolVal').textContent = `±${fmtUSD((S.cfg.refPrice * S.cfg.tolPct) / 100)} of price`;
+    $('tolVal').textContent = `±${fmtUSDPrecise((S.cfg.refPrice * S.cfg.tolPct) / 100)} of price`;
     $('refPriceVal').textContent = S.refPrice
       ? `${fmtPrice(S.refPrice)} at start`
       : feed.tape.last
@@ -563,7 +573,7 @@ export function mountTrace(root: HTMLElement) {
     }
     // A tolerance that swallows the whole drawing is the one failure a live feed makes easy.
     if (S.strokes.length && !p.legs.length && p.flats.length)
-      h += `<div class="warn">Every segment is inside the ${c.tolPct}% tolerance (±${fmtUSD((c.refPrice * c.tolPct) / 100)}), so the drawing has no direction. Lower the simplify tolerance, draw a steeper move, or pick a livelier market. <button class="btn small" data-tol="1">Halve the tolerance</button></div>`;
+      h += `<div class="warn">Every segment is inside the ${c.tolPct}% tolerance (±${fmtUSDPrecise((c.refPrice * c.tolPct) / 100)}), so the drawing has no direction. Lower the simplify tolerance, draw a steeper move, or pick a livelier market. <button class="btn small" data-tol="1">Halve the tolerance</button></div>`;
     h += `<h2>Plan summary</h2><div class="summary">${summary()}</div>`;
     if (p.legs.length) {
       h += `<h3>Interpreted legs</h3><table><tr><th>#</th><th>Side</th><th>From</th><th>To</th><th class="num">Move</th><th>Slope</th><th>Turn</th><th class="num">Notional</th></tr>`;
@@ -1363,6 +1373,11 @@ export function mountTrace(root: HTMLElement) {
           ctx.lineTo(lerp(xa, xb, u), lerp(ya, yb, u));
           ctx.stroke();
         }
+        // An arrowhead closing the leg, aligned to the leg itself: a rising leg points
+        // up and is a long, a falling leg points down and is a short. The slope already
+        // carried that information, but only if you knew to read it — the head states
+        // the side, and the colour says it a second time.
+        arrowHead(xa, ya, xb, yb, it.dir > 0 ? '#1F8A5B' : '#C6412C');
       }
       ctx.restore();
     }
@@ -1583,7 +1598,7 @@ export function mountTrace(root: HTMLElement) {
       ctx.textAlign = 'left';
       ctx.font = font('600 12px');
       ctx.fillText(
-        `No trade: every stretch you drew moves less than the ±${fmtUSD((c.refPrice * c.tolPct) / 100)} tolerance.`,
+        `No trade: every stretch you drew moves less than the ±${fmtUSDPrecise((c.refPrice * c.tolPct) / 100)} tolerance.`,
         x0 + 8,
         y1 - 26,
       );
@@ -1767,6 +1782,42 @@ export function mountTrace(root: HTMLElement) {
    * moment a close can actually take effect — at the price the position is carrying, and
    * it only exists while there is something to close.
    */
+  /**
+   * A filled arrowhead at (bx, by), pointing along the a -> b direction. Outlined in the
+   * page background so it stays readable where it lands on the price line or a turn
+   * marker, and skipped entirely for a leg too short to carry one without covering it.
+   */
+  function arrowHead(ax: number, ay: number, bx: number, by: number, color: string) {
+    const dx = bx - ax;
+    const dy = by - ay;
+    const len = Math.hypot(dx, dy);
+    // Too short to carry a head without the head becoming the whole leg.
+    if (len < 34) return;
+    const ux = dx / len;
+    const uy = dy / len;
+    const H = 11;
+    const Wd = 7;
+    // Held back from the endpoint: the next leg's numbered marker sits exactly there,
+    // so a head placed on the point collides with it at every turn.
+    const tipX = bx - ux * 16;
+    const tipY = by - uy * 16;
+    const baseX = tipX - ux * H;
+    const baseY = tipY - uy * H;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(tipX, tipY);
+    ctx.lineTo(baseX - uy * Wd, baseY + ux * Wd);
+    ctx.lineTo(baseX + uy * Wd, baseY - ux * Wd);
+    ctx.closePath();
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#FFFFFF';
+    ctx.lineWidth = 1.6;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+    ctx.fill();
+    ctx.restore();
+  }
+
   /** A two-line note in the bottom-left of the plot, for states that need explaining. */
   function notice(x0: number, y1: number, head: string, sub: string) {
     ctx.save();

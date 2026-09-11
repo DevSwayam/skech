@@ -32,6 +32,20 @@ export function fmtPrice(p: number) {
   );
 }
 
+/**
+ * A price *difference*, at a precision the difference can actually survive.
+ *
+ * `fmtUSD` fixes two decimals, which renders every sub-cent amount as "$0.00" — and the
+ * liveliest perps trade near $0.13, where a realistic tolerance is a few ten-thousandths
+ * of a dollar. A tolerance field reading "±$0.00 of price" is worse than no field.
+ */
+export function fmtUSDPrecise(x: number) {
+  const a = Math.abs(x);
+  if (a >= 0.005 || a === 0) return fmtUSD(x);
+  const dp = a >= 0.0005 ? 4 : a >= 0.000005 ? 6 : 8;
+  return (x < 0 ? '−$' : '$') + a.toFixed(dp);
+}
+
 /** m:ss, signed, for an axis that now extends into the history before the session. */
 export function fmtTSigned(sec: number) {
   return (sec < -0.5 ? '−' : '') + fmtT(Math.abs(sec));
